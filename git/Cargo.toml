@@ -1,0 +1,11 @@
+[package]
+name = "git"
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+gix.workspace = true
+serde.workspace = true
+thiserror.workspace = true
