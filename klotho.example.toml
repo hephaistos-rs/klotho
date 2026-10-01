@@ -1,0 +1,39 @@
+# Klotho configuration: every setting, with its default.
+#
+# Start the server with `klotho serve --config klotho.toml` (or set KLOTHO_CONFIG).
+# Unknown keys stop startup with an error, so a typo can't silently fall back to
+# a default.
+#
+# Every setting can be overridden by an environment variable: KLOTHO_, then the
+# section and key in capitals joined by a double underscore. For example
+# `server.addr` is KLOTHO_SERVER__ADDR and `storage.data_dir` is
+# KLOTHO_STORAGE__DATA_DIR.
+
+[server]
+# Address and port to listen on.
+addr = "0.0.0.0:3000"
+# On Ctrl-C or SIGTERM, how many seconds to wait for running requests and git
+# operations (such as a push) before exiting.
+shutdown_grace_secs = 30
+# Seconds before a request times out with 408. Doesn't apply to git clone, fetch
+# and push, which take as long as they need.
+request_timeout_secs = 30
+# Largest request body the JSON API accepts, in bytes. Default: 1 MiB.
+api_body_limit = 1048576
+
+[storage]
+# Folder for all of Klotho's data. Relative paths, here and below, are resolved
+# against the folder this config file is in, not the current directory. The
+# startup log shows the resolved absolute paths.
+data_dir = "data"
+# Each location below defaults to a folder or file inside data_dir. Set one to
+# move just that location, e.g. repositories onto a separate disk.
+# repositories = "<data_dir>/repositories"   # bare git repositories
+# database = "<data_dir>/klotho.db"          # SQLite metadata
+# files = "<data_dir>/files"                 # LFS objects, release assets, avatars
+
+[log]
+# Which log messages to show, as a tracing filter: a level ("info"), or
+# comma-separated target=level pairs. The RUST_LOG environment variable, if set,
+# takes precedence.
+filter = "klotho=info,tower_http=info"

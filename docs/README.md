@@ -13,6 +13,7 @@
 | [decisions/0001-stack.md](decisions/0001-stack.md) | Technology stack: gix plus the `git` program, axum, sqlx (its SvelteKit frontend is superseded by ADR 0002) |
 | [decisions/0002-topcoat-ui.md](decisions/0002-topcoat-ui.md) | Web UI: server-rendered with Topcoat, mounted inside axum, assets embedded in the binary |
 | [decisions/0003-data-and-file-storage.md](decisions/0003-data-and-file-storage.md) | One data directory; git repositories on local disk; other files (LFS, releases, attachments) local or in S3 |
+| [decisions/0004-native-git-transport.md](decisions/0004-native-git-transport.md) | All git work in-process with gitoxide, including the server side of the protocol; Klotho never runs the `git` program (supersedes ADR 0001's git section) |
 
 ## Design
 
@@ -69,10 +70,10 @@ Requirements that simply haven't been implemented yet are not listed as conflict
 
 ## Most important conflicts today
 
-Checked against commit `6b4895f`.
+Checked after Phase 0 (2026-10-01). Graceful shutdown, the config file and the data directory were fixed in Phase 0.
 
-1. **Anyone can push.** There is no authentication or authorisation on git or the API ([FR-ACL-001](requirements/access-control.md), [FR-AUTH-020](requirements/auth.md)).
+1. **Anyone can push.** There is no authentication or authorisation on git or the API ([FR-ACL-001](requirements/access-control.md), [FR-AUTH-020](requirements/auth.md)). The default address is `0.0.0.0`, so that includes anyone on the network ([NFR-OPS-012](requirements/operations.md)).
 2. **Casing is discarded.** `MyRepo` is stored and shown as `myrepo` ([FR-NAME-020](requirements/naming.md)). Fixing it needs a metadata store ([FR-STOR-001](requirements/storage.md)).
 3. **Repositories named `con`, `nul`, `aux`, … can be created on Windows but can't be cloned** (verified: HTTP 500) ([FR-STOR-007](requirements/storage.md)).
 4. **Repository creation isn't atomic** ([FR-STOR-005](requirements/storage.md)), and **pushes have no size limit or subprocess cap** ([NFR-SEC-020](requirements/security.md), [NFR-SEC-022](requirements/security.md)).
-5. **No graceful shutdown**, so restarting cuts off in-flight pushes ([NFR-OPS-030](requirements/operations.md)).
+5. **Git transport still runs the `git` program**, which [ADR 0004](decisions/0004-native-git-transport.md) replaces with an in-process engine (roadmap Phase 1b).

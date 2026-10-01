@@ -65,7 +65,7 @@ Checked against commit `6b4895f`.
 | Requirement | Current behaviour | Where |
 |---|---|---|
 | NFR-SEC-010 (safe raw content) | **Partial.** Raw blobs are served as `application/octet-stream`, which is the right idea, but without `X-Content-Type-Options: nosniff`. | [api.rs:102-111](../../crates/server/src/api.rs#L102-L111) |
-| NFR-SEC-020 (body size limits) | **Conflict.** The body limit is turned off for git routes with no replacement, so a single push can be as large as the disk allows. | [git_http.rs:37](../../crates/server/src/git_http.rs#L37) |
+| NFR-SEC-020 (body size limits) | **Partial.** `/api` has a configurable limit (default 1 MiB, `413` above it). The body limit is still turned off for git routes with no replacement, so a single push can be as large as the disk allows. | [git_http.rs](../../crates/server/src/git_http.rs) (`router`) |
 | NFR-SEC-022, NFR-SEC-023 (subprocess caps and cleanup) | **Conflict.** Each git request spawns a `git` process with no concurrency cap and no timeout. The child isn't created with `kill_on_drop`, so a client that disconnects mid-clone leaves the process running until git notices the broken pipe. | [git_http.rs:120-165](../../crates/server/src/git_http.rs#L120-L165) |
 | NFR-SEC-041 (minimal git environment) | **Conflict.** `git` inherits the server's entire environment. Only `GIT_PROTOCOL` is set explicitly, though it is correctly allowlisted. | [git_http.rs:62-73](../../crates/server/src/git_http.rs#L62-L73) |
 

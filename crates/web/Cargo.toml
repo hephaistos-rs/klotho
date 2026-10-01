@@ -4,5 +4,10 @@ rust-version.workspace = true
 license.workspace = true
 version.workspace = true
 edition.workspace = true
+publish.workspace = true
 
 [dependencies]
+topcoat = { workspace = true, features = ["default", "tailwind", "tower"] }
+
+[build-dependencies]
+topcoat = { workspace = true, features = ["tailwind"] }

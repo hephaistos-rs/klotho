@@ -4,6 +4,7 @@ rust-version.workspace = true
 license.workspace = true
 version.workspace = true
 edition.workspace = true
+publish.workspace = true
 
 [dependencies]
 gix.workspace = true

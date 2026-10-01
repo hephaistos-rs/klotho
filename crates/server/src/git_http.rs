@@ -25,14 +25,16 @@ use serde::Deserialize;
 use tokio::io::AsyncRead;
 use tokio::process::Command;
 use tokio_util::io::{ReaderStream, StreamReader};
+use tokio_util::task::TaskTracker;
 
+use crate::AppState;
 use crate::error::AppError;
 
-pub fn router() -> Router<RepoStore> {
+pub fn router() -> Router<AppState> {
     Router::new()
         .route("/{repo}/info/refs", get(info_refs))
-        .route("/{repo}/git-upload-pack", post(|s, p, h, b| rpc(Service::UploadPack, s, p, h, b)))
-        .route("/{repo}/git-receive-pack", post(|s, p, h, b| rpc(Service::ReceivePack, s, p, h, b)))
+        .route("/{repo}/git-upload-pack", post(|s, t, p, h, b| rpc(Service::UploadPack, s, t, p, h, b)))
+        .route("/{repo}/git-receive-pack", post(|s, t, p, h, b| rpc(Service::ReceivePack, s, t, p, h, b)))
         // Pushes can be arbitrarily large.
         .layer(DefaultBodyLimit::disable())
 }
@@ -91,11 +93,7 @@ async fn info_refs(
     let repo_path = repo_path(&store, &repo)?;
     let protocol = git_protocol(&headers);
 
-    let output = service
-        .command(&repo_path, protocol, true)
-        .stderr(Stdio::inherit())
-        .output()
-        .await?;
+    let output = service.command(&repo_path, protocol, true).stderr(Stdio::inherit()).output().await?;
     if !output.status.success() {
         return Err(AppError::Internal(anyhow::anyhow!(
             "git {} --advertise-refs exited with {}",
@@ -120,6 +118,7 @@ async fn info_refs(
 async fn rpc(
     service: Service,
     State(store): State<RepoStore>,
+    State(git_tasks): State<TaskTracker>,
     Path(repo): Path<String>,
     headers: HeaderMap,
     body: Body,
@@ -142,20 +141,18 @@ async fn rpc(
     // git clients gzip large fetch requests.
     let reader = StreamReader::new(body.into_data_stream().map_err(std::io::Error::other));
     let gzipped = headers.get(header::CONTENT_ENCODING).is_some_and(|v| v == "gzip");
-    let mut input: Pin<Box<dyn AsyncRead + Send>> = if gzipped {
-        Box::pin(GzipDecoder::new(reader))
-    } else {
-        Box::pin(reader)
-    };
+    let mut input: Pin<Box<dyn AsyncRead + Send>> =
+        if gzipped { Box::pin(GzipDecoder::new(reader)) } else { Box::pin(reader) };
 
     // Feed the request in the background while the response streams out, and
-    // close stdin when done so git knows the request is complete.
-    tokio::spawn(async move {
+    // close stdin when done so git knows the request is complete. Both tasks are
+    // tracked so shutdown waits for git to finish (NFR-OPS-030).
+    git_tasks.spawn(async move {
         if let Err(err) = tokio::io::copy(&mut input, &mut stdin).await {
             tracing::warn!(%err, "failed to forward request body to git");
         }
     });
-    tokio::spawn(async move {
+    git_tasks.spawn(async move {
         match child.wait().await {
             Ok(status) if !status.success() => tracing::warn!(%status, "git {} failed", service.name()),
             Err(err) => tracing::warn!(%err, "failed to wait for git {}", service.name()),
@@ -179,9 +176,8 @@ fn repo_path(store: &RepoStore, repo: &str) -> Result<std::path::PathBuf, AppErr
 /// v2 works. Only forwarded if it looks like `version=2`-style key/values.
 fn git_protocol(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get("git-protocol")?.to_str().ok()?;
-    let safe = value
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'=' | b':' | b'.' | b'-' | b'_'));
+    let safe =
+        value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'=' | b':' | b'.' | b'-' | b'_'));
     safe.then_some(value)
 }
 

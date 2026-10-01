@@ -44,13 +44,11 @@
 
 ## Conflicts with the current implementation
 
-Checked against commit `6b4895f`.
+Checked against the Phase 0 work (2026-10-01).
 
 | Requirement | Current behaviour | Where |
 |---|---|---|
-| NFR-OPS-003 (git version check) | **Conflict.** The server never checks that `git` exists or which version it is. A missing binary only shows up on the first clone, as a 500. | [git_http.rs:62-73](../../crates/server/src/git_http.rs#L62-L73), [main.rs](../../crates/klotho/src/main.rs) |
-| NFR-OPS-010, NFR-OPS-011 (config file, validation) | **Partial.** Configuration is two environment variables (`KLOTHO_ADDR`, `KLOTHO_REPOS`) with no config file, as the existing TODO notes. Invalid addresses are rejected, but the storage path is taken as given. | [main.rs:14-18](../../crates/klotho/src/main.rs#L14-L18) |
-| NFR-OPS-020 (structured logs, request IDs) | **Partial.** `tracing` gives levelled logs with an `EnvFilter`, but the output is plain text and there are no request IDs. | [main.rs:10-12](../../crates/klotho/src/main.rs#L10-L12) |
-| NFR-OPS-030 (graceful shutdown) | **Conflict.** `axum::serve` runs without `with_graceful_shutdown`, so Ctrl-C or SIGTERM ends the process immediately and cuts off in-flight pushes. | [main.rs:23](../../crates/klotho/src/main.rs#L23) |
+| NFR-OPS-012 (loopback by default) | **Conflict.** The default address is `0.0.0.0:3000`, changed on purpose in `e7f0061`. Until authentication exists (Phase 2), anyone who can reach the port can push. | [config.rs](../../crates/core/src/config.rs) (`ServerConfig::default`) |
+| NFR-OPS-020 (structured logs, request IDs) | **Partial.** Every request gets an `X-Request-Id` that appears in its log span, but logs are plain text. JSON output comes in Phase 10. | [lib.rs](../../crates/server/src/lib.rs) (`build_app`) |
 
-Met today: NFR-OPS-012 (default `127.0.0.1:3000`).
+Met today: NFR-OPS-003 (git version check at startup, until ADR 0004 removes the need), NFR-OPS-010 and 011 (TOML config with `KLOTHO_SECTION__KEY` overrides, unknown keys rejected by name), NFR-OPS-013 (`klotho.example.toml`, checked by a test), NFR-OPS-022 (liveness at `/-/health`; readiness comes with the database in Phase 1) and NFR-OPS-030 (graceful shutdown with a grace period).

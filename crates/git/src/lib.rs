@@ -8,8 +8,10 @@ mod browse;
 mod error;
 mod name;
 mod store;
+mod version;
 
 pub use browse::{CommitInfo, RefInfo, RepoInfo, TreeEntryInfo, read_blob};
 pub use error::{Error, Result};
 pub use name::RepoName;
 pub use store::RepoStore;
+pub use version::{GitCheckError, GitVersion, check_git};

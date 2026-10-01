@@ -15,6 +15,8 @@ rust-version = "1.98.1"
 license = "MIT"
 version = "0.1.0"
 edition = "2024"
+# Klotho ships as a binary, not as crates on crates.io.
+publish = false
 
 [workspace.dependencies]
 klotho-core = { path = "crates/core" }
@@ -23,6 +25,14 @@ klotho-server = { path = "crates/server" }
 klotho-ssh = { path = "crates/ssh" }
 klotho-web = { path = "crates/web" }
 anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+figment = { version = "0.10.19", features = ["toml", "env"] }
+mime_guess = "2.0.5"
+rust-embed = "8.12.0"
+tempfile = "3.27.0"
+topcoat = { version = "=0.9.0", default-features = false }
+tower = "0.5"
+tower-http = "0.7.1"
 async-compression = "0.4.49"
 axum = "0.8.9"
 futures-util = "0.3.34"

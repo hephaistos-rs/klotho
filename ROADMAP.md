@@ -7,6 +7,7 @@ Background:
 - [ADR 0001](docs/decisions/0001-stack.md): why the stack is what it is.
 - [ADR 0002](docs/decisions/0002-topcoat-ui.md): why the UI is server-rendered with Topcoat (replaces the SvelteKit SPA).
 - [ADR 0003](docs/decisions/0003-data-and-file-storage.md): the data directory, and why only non-git files can go to S3.
+- [ADR 0004](docs/decisions/0004-native-git-transport.md): why Klotho does all git work in-process with gitoxide and never runs the `git` program.
 - [API endpoints](docs/design/api-endpoints.md) and [auth flows](docs/design/auth-flows.md): the designs the phases implement.
 
 Versions are the latest at the time of writing (2026-09-30). Check crates.io (and the Mermaid release) when you add each one.
@@ -33,7 +34,7 @@ klotho/
 │   │       ├── lib.rs          #   build_app(state) -> Router
 │   │       ├── api/            #   /api/v1 handlers, one module per area (repos.rs, user.rs…)
 │   │       ├── oauth.rs        #   /-/oauth provider endpoints (Phase 8)
-│   │       ├── git_http.rs     #   smart HTTP (today's src/smart_http.rs)
+│   │       ├── git_http.rs     #   smart HTTP, driving klotho-git's protocol engine (Phase 1b)
 │   │       ├── assets.rs       #   /-/assets/*: the embedded Topcoat bundle (FR-UI-052)
 │   │       ├── bearer.rs       #   Authorization: Bearer -> Actor extractor (the API's only auth)
 │   │       └── error.rs        #   ApiError -> JSON {code, message} (FR-API-030)
@@ -55,7 +56,7 @@ klotho/
 │   │   │   ├── files.rs        #   FileStore: local or S3 via object_store (ADR 0003)
 │   │   │   └── db/             #   sqlx queries
 │   │   └── migrations/         #   sqlx migrations
-│   ├── git/                    # klotho-git. Repositories on disk: gix reads, RepoStore, spawning upload-/receive-pack, hooks
+│   ├── git/                    # klotho-git. Repositories on disk via gix: RepoStore, reads, the protocol engine (ADR 0004)
 │   └── ssh/                    # klotho-ssh. russh server that hands off to klotho-git (Phase 4)
 │
 ├── xtask/                      # `cargo xtask dist`: the two-pass release build (ADR 0002)
@@ -155,7 +156,7 @@ flowchart LR
 
 Styling is Tailwind (through Topcoat, no Node) with Topcoat UI components copied in by `topcoat ui add`. Once copied they're our code: edit them freely.
 
-**Upgrading Topcoat.** It's experimental and makes breaking changes. Upgrade one minor version at a time, in its own PR, and read the changelog first. The origin-check test and the asset manifest check in CI exist to catch silent breakage.
+**Upgrading Topcoat.** It's experimental and makes breaking changes. Upgrade one minor version at a time, in its own PR, and read the changelog first. The origin-check test and the `cargo xtask dist` check in CI exist to catch silent breakage. Upgrade `topcoat-cli` to the same version at the same time: the CLI's bundle format has to match the crate's.
 
 ### Tools
 
@@ -164,43 +165,49 @@ Styling is Tailwind (through Topcoat, no Node) with Topcoat UI components copied
 | `sqlx-cli` | `cargo install sqlx-cli --no-default-features --features sqlite` | `sqlx migrate add`, and `cargo sqlx prepare` for offline query checking in CI |
 | `cargo-deny` | `cargo install cargo-deny` | Licence and security checks in CI |
 | `bacon` | `cargo install bacon` | Re-runs check, test or clippy on every save |
-| `topcoat-cli` | `cargo install topcoat-cli` | `topcoat dev` (rebuild and re-bundle on save), `topcoat asset bundle`, `topcoat ui add`, `topcoat fmt` for `view!` blocks |
+| `topcoat-cli` | `cargo install topcoat-cli --version 0.9.0 --locked` | `cargo xtask dev` and `cargo xtask dist` run it. Also `topcoat ui add` and `topcoat fmt` for `view!` blocks. Keep its version equal to the `topcoat` crate's |
+| `cargo-fuzz` | `cargo install cargo-fuzz` | Fuzz targets for the git protocol parsers (Phase 1b). Needs a nightly toolchain |
 
 ---
 
 ## 3. Phases
 
-Phases run in order. The first milestone that matters is **after Phase 5: good enough for a small team to use for real.** Everything after that adds breadth.
+Phases run in order: 0, 1, 1b, 2 and onwards. Phase 1b (the native git transport) was added on 2026-10-01 with ADR 0004 and kept its own number so the phase numbers used across the docs stay valid. The first milestone that matters is **after Phase 5: good enough for a small team to use for real.** Everything after that adds breadth.
 
 ### Phase 0: Groundwork
 
 **Goal:** restructure, and fix the things that are cheap now and painful later.
 
-- ~~Move to the workspace layout above, and rename crate `git` → `klotho-git`.~~ Done.
-- Config: a `figment` TOML file plus `KLOTHO_…` environment overrides, with `#[serde(deny_unknown_fields)]`. Ship `klotho.example.toml`.
-- **One data directory** (FR-STOR-012): a `data_dir` setting (default `./data`) with `repositories/`, `klotho.db` and `files/` under it, each overridable. Resolve relative paths against the config file's folder and log the absolute paths at startup. This replaces `KLOTHO_REPOS`.
-- `klotho.dev.toml` in the repository with `data_dir = "testRepos"`. Then remove the `[env]` section from `.cargo/config.toml` and the `data/repositories` fallback in `main.rs`.
-- CLI with `clap`: `klotho serve`, and an empty `klotho admin` for later.
-- Graceful shutdown: `axum::serve(...).with_graceful_shutdown(signal)`, with a grace period for in-flight pushes.
-- A git version check at startup (`git --version` ≥ your minimum; 2.39 is a sensible floor).
-- `tower-http` layers: tracing, request IDs, timeouts on non-git routes, a body limit on `/api`.
-- `/-/health`.
-- CI (GitHub Actions or, later, Lachesis): `cargo fmt --check`, `clippy -D warnings`, `cargo test`, `cargo deny check`.
-- **Topcoat spike:** an empty `klotho-web` with one "hello" page, mounted as axum's fallback, and `cargo xtask dist` producing one binary that serves its CSS from `/-/assets/` with no `assets/` directory next to it. This proves the two-pass build (ADR 0002) before anything depends on it.
+**Status:** done (2026-10-01).
+
+- ~~Move to the workspace layout above, and rename crate `git` → `klotho-git`.~~
+- ~~Config: a `figment` TOML file plus `KLOTHO_SECTION__KEY` environment overrides, with `#[serde(deny_unknown_fields)]`. Ship `klotho.example.toml`.~~ The config types live in `klotho-core::config`. Loading lives in the binary. A test checks that the example file sets every key to its default.
+- ~~**One data directory** (FR-STOR-012): `storage.data_dir` (default `data`) with `repositories/`, `klotho.db` and `files/` under it, each overridable. Relative paths resolve against the config file's folder, and the absolute paths are logged at startup.~~
+- ~~`klotho.dev.toml` with `data_dir = "testRepos"`.~~ `.cargo/config.toml` now sets only `KLOTHO_CONFIG`, so `cargo run` uses it.
+- ~~CLI with `clap`: `klotho [serve]` (the default) and an empty `klotho admin`.~~
+- ~~Graceful shutdown: on Ctrl-C or SIGTERM, stop accepting connections and wait up to `server.shutdown_grace_secs` for running requests and git tasks (a `TaskTracker`).~~
+- ~~A git version check at startup (≥ 2.39).~~ Interim: it goes away with the subprocess transport ([ADR 0004](docs/decisions/0004-native-git-transport.md)).
+- ~~`tower-http` layers: tracing (path only, never the query string), request IDs (an incoming `X-Request-Id` is kept), a timeout on everything except git transport, a body limit on `/api`. Unknown `/api` paths get a JSON 404.~~
+- ~~`/-/health`.~~
+- ~~CI (GitHub Actions): `cargo fmt --check`, `clippy -D warnings` and `cargo test` on Linux and Windows; `cargo deny check`; `cargo xtask dist`.~~
+- ~~**Topcoat spike:** `klotho-web` with a hello page, mounted as axum's fallback, and `cargo xtask dist` producing one binary that serves its CSS from `/-/assets/`.~~ `cargo xtask dev` runs `topcoat dev` with the dev config.
 
 **Requirements:** NFR-OPS-003, 010, 011, 012, 022 (health), 030; NFR-SEC-020 (partly).
 
 **Done when:**
-- [ ] `cargo test` passes from the workspace root and covers all crates.
-- [ ] A config file with a typo'd key refuses to start and names the key.
-- [ ] Starting from another folder with the same config file uses the same data directory, and the startup log shows its absolute path.
-- [ ] Ctrl-C during a large `git push` lets the push finish.
-- [ ] Starting with a missing or too-old `git` prints a clear error and exits non-zero.
-- [ ] The `cargo xtask dist` binary, copied alone to an empty directory, serves the hello page with its stylesheet, and the CI manifest check passes.
+- [x] `cargo test` passes from the workspace root and covers all crates.
+- [x] A config file with a typo'd key refuses to start and names the key.
+- [x] Starting from another folder with the same config file uses the same data directory, and the startup log shows its absolute path.
+- [x] Shutdown during a running git request lets it finish (`crates/server/tests/app.rs`, over real TCP), and gives up after the grace period.
+- [x] Starting with a missing or too-old `git` prints a clear error and exits non-zero.
+- [x] The `cargo xtask dist` binary, copied alone to an empty directory, serves the hello page with its stylesheet. `xtask` checks this itself on every run, including in CI.
 
-> **Guide notes.**
-> - Do the restructure in one commit with no behaviour changes, so `git log --follow` stays useful.
-> - Grace period: `with_graceful_shutdown` only stops *accepting* connections. The spawned `git` children also need tracking (a `JoinSet` or a counter) so you wait for them.
+> **Guide notes (what we learned).**
+> - **The asset manifest check from ADR 0002 couldn't be built as planned.** `topcoat asset bundle` always rebuilds before scanning and has no `--features` flag, so it can't scan the final, embedded binary. `cargo xtask dist` starts the final binary instead and fetches the page and its stylesheet. A wrong asset ID would make the page fail to render, so this catches the same breakage.
+> - **`embed-assets` must stay on `klotho-server`, never on `klotho-web`.** `tailwind::stylesheet!()` is `asset!(concat!(env!("OUT_DIR"), …))`, and asset IDs hash the path. A feature on `klotho-web` changes its `OUT_DIR`, and with it every asset ID, between the two build passes.
+> - **`topcoat dev` passes `HOST`/`PORT` and waits for a readiness message.** Klotho uses them only when `TOPCOAT_DEV_URL` is set, and `klotho_server::serve` calls `klotho_web::notify_dev_server` after binding. `cargo topcoat dev` (the cargo subcommand form) is broken in 0.9.0, so use `topcoat dev` or `cargo xtask dev`.
+> - **The workspace's `topcoat` entry sets `default-features = false`.** Workspace dependencies can't turn default features off per crate, and `build.rs` needs Topcoat without them.
+> - **Formatting:** `rustfmt.toml` pins `max_width = 110` with `use_small_heuristics = "Max"`, the closest match to the code as it was written.
 
 ### Phase 1: Metadata store and repository identity
 
@@ -228,6 +235,39 @@ Phases run in order. The first milestone that matters is **after Phase 5: good e
 > - Turn on SQLite's WAL mode and `foreign_keys=ON` at connect time.
 > - Run `cargo sqlx prepare` so CI can build without a database.
 > - **Make `owner_id` point at an `owners` table** (`id`, `kind` = `user` | `org`, `name`, `name_key` with a unique index), with `users` referencing it. Organisations (Phase 7) then slot in without rewriting every foreign key, and FR-NAME-011 (one namespace for users and orgs) is enforced by the index from day one.
+
+### Phase 1b: Native git transport
+
+**Goal:** Klotho serves clone, fetch and push itself, with gitoxide, and never runs the `git` program ([ADR 0004](docs/decisions/0004-native-git-transport.md)). It comes after Phase 1 so it's built on ID-based storage, and before Phase 2 so authentication and pre-receive checks plug into our own code instead of a subprocess.
+
+- A `protocol` module in `klotho-git` that takes a repository and a byte stream in each direction, with no HTTP or SSH in it. `klotho-server` drives it statelessly (HTTP) and `klotho-ssh` statefully (Phase 4).
+- **Step 1: protocol v2 fetch.** pkt-lines with `gix-packetline`; the capability advertisement; `ls-refs` (with `ref-prefix`, `symrefs`, `peel`); `fetch` with want/have negotiation, `done`, and `side-band-64k` progress. Packs are generated with `gix-pack`'s `data::output` pipeline on the blocking pool, behind a semaphore.
+- **Step 2: v0/v1 fetch** for older clients: the ref advertisement with capabilities, `multi_ack_detailed`, `no-done`, `thin-pack`, `ofs-delta`, `include-tag`.
+- **Step 3: push** (`receive-pack`, v0/v1 only, because git has no v2 push): commands, quarantine directory, indexing the (thin) pack with `gix-pack`, connectivity and object checks, `report-status`, `atomic`, `push-options`, and a `gix-ref` transaction. Leave a pre-receive and a post-receive function in place, both empty for now. Phase 2 fills in pre-receive.
+- **Step 4: shallow** (`deepen`, `deepen-since`, `deepen-not`, `deepen-relative`). FR-GIT-010 is must-have, because CI clones are shallow.
+- **Step 5: partial clone filters** (`blob:none`, `blob:limit`, `tree:0`).
+- **Switch over:** route the git HTTP paths to the engine, then delete the subprocess code in `git_http.rs`, the startup git version check and `GitVersion`, and apply ADR 0004's requirement changes.
+
+**Requirements:** FR-GIT-001, 004–006, 010, 011, 020, 021 (hook points only), 022, 023; NFR-PERF-001–004; NFR-STOR-001, 002.
+
+**New packages:** `gix` features for pack writing and ref transactions; `gix-packetline` (already a dependency of `gix`, check whether `gix` re-exports it); `cargo-fuzz` as a tool.
+
+**Done when:**
+- [ ] The end-to-end suite (real `git` client against the real binary, Linux and Windows) passes for: clone, fetch, push, force push, delete a branch, push tags, `--atomic` with one ref rejected, `--depth 1`, `--shallow-since`, `--filter=blob:none`, and protocol v0, v1 and v2 (`-c protocol.version=N`).
+- [ ] A push of 2 GiB doesn't grow server memory (NFR-PERF-004).
+- [ ] Killing the client mid-push leaves no new refs and no files outside the quarantine. The quarantine is cleaned up.
+- [ ] A pushed pack missing an object the new ref needs is rejected, and the client prints our message.
+- [ ] Fuzz targets for the pkt-line reader and both command parsers run in CI for a fixed time without findings.
+- [ ] Clone time of the reference large repository is recorded against `git http-backend` (NFR-PERF-001). It doesn't have to meet 110% yet, but it has to be measured.
+- [ ] No `std::process::Command` and no `tokio::process` remain outside tests.
+
+> **Guide notes.**
+> - **Read git's protocol docs as the spec:** `gitprotocol-pack`, `gitprotocol-v2`, `gitprotocol-capabilities`, `gitprotocol-http`. When behaviour is unclear, check what `git upload-pack` does with `GIT_TRACE_PACKET=1` on the client.
+> - **Stateless HTTP negotiation** is the subtle part of v0/v1: each POST repeats all `have`s, and the server must answer as if the conversation had continued. Protocol v2 was designed around this, which is one reason to build v2 first.
+> - **gitoxide's client is your test partner too.** Fetching from our server with `gix` in unit tests gives fast tests that don't need the `git` program, alongside the end-to-end tests that do.
+> - **Only serve objects reachable from the refs the client was shown.** Never offer `allow-any-sha1-in-want`. Forks share pack files (Phase 6) and repositories will hold unreachable objects, so serving any object by ID would leak data between repositories.
+> - Treat every byte from the client as hostile: length limits on pkt-lines (65520 bytes), caps on the number of `want`/`have` lines and on recursion in pack decoding, and timeouts per request.
+> - The quarantine directory is also where size limits (NFR-SEC-020) and later quotas (Phase 10) are checked: measure the incoming pack before indexing it.
 
 ### Phase 2: Accounts and access control
 
@@ -287,26 +327,24 @@ Phases run in order. The first milestone that matters is **after Phase 5: good e
 
 **Goal:** safe to expose to a network.
 
-- SSH server (`russh`), user SSH keys, deploy keys.
-- Push hooks: a `pre-receive` / `post-receive` hook script in each repository that calls back into Klotho over a local socket or HTTP with a per-process secret. Alternatively, run `receive-pack` with `-c core.hooksPath=<klotho-managed dir>`.
-- A push event table, recorded by post-receive (it feeds the thread view later).
-- Git subprocess limits: a concurrency semaphore, `kill_on_drop(true)`, a timeout, a minimal environment. A push size limit.
-- Repository config at creation: `core.fsync=committed`, `receive.fsckObjects=true`.
-- Archive downloads.
+- SSH server (`russh`), user SSH keys, deploy keys. The SSH channel drives the Phase 1b protocol engine in its stateful mode.
+- A push event table, recorded by the post-receive function (it feeds the thread view later).
+- Engine limits: a semaphore on concurrent pack generation, a per-request time limit, and cancellation when the client disconnects (the in-process forms of NFR-SEC-022 and 023). A push size limit, checked in the quarantine.
+- Archive downloads with `gix-archive`, streamed.
 - Backup and restore (`klotho admin backup` / `restore`), covering repositories, the database and local files, with a test that round-trips them.
 
-**Requirements:** FR-GIT-002, 003, 012, 020–022, 024; FR-AUTH-014, 015; FR-ACL-020; NFR-SEC-020, 022, 023, 041; NFR-STOR-001, 002, 010; FR-STOR-040–042.
+**Requirements:** FR-GIT-002, 003, 012, 024; FR-AUTH-014, 015; FR-ACL-020; NFR-SEC-020, 022, 023; NFR-STOR-010; FR-STOR-040–042.
 
 **Done when:**
 - [ ] `git clone git@host:owner/repo.git` works with a registered key, and is refused with an unknown one.
-- [ ] 200 simultaneous clones: none fail, and the number of running `git` processes stays at or below the cap.
-- [ ] Killing a clone client leaves no orphan `git` process.
+- [ ] 200 simultaneous clones: none fail, and the number of packs being built at once stays at or below the cap.
+- [ ] Killing a clone client stops its pack generation within a second.
 - [ ] Backup → wipe → restore gives identical refs in every repository.
 
 > **Guide notes.**
-> - Hooks are the fiddliest part of Klotho. Gitea runs `gitea hook pre-receive`, a subcommand of its own binary, as the hook. Do the same: `klotho hook pre-receive`, which talks to the running server. Then the hook never needs its own config or database access.
-> - **Quarantine.** During pre-receive, the pushed objects aren't in the repository yet. git puts them in a quarantine directory and tells the hook via `GIT_QUARANTINE_PATH`, `GIT_OBJECT_DIRECTORY` and `GIT_ALTERNATE_OBJECT_DIRECTORIES`. Any check that reads the new objects (force-push detection in Phase 7, quotas in Phase 10) must run with those variables. Have the hook forward them to the server, and keep that in mind when the minimal environment (NFR-SEC-041) strips everything else.
-> - **Identity in the hook.** Tell the hook who is pushing by setting `KLOTHO_PUSH_ID` (a one-time ID the server maps to the actor) on the `receive-pack` process. Never pass a user ID the hook could be tricked into trusting.
+> - **Hooks aren't the hard part any more.** With the native engine (ADR 0004), pre-receive and post-receive are function calls with the actor already known, so there are no hook scripts, no callback protocol, and no way for a hook to be told the wrong identity.
+> - **Cancellation is cooperative.** Pack generation runs on the blocking pool, where dropping the future doesn't stop it. Pass a cancellation flag into the counting and encoding loops, and set it when the response body is dropped.
+> - **Back up a consistent snapshot.** Pushes keep running during a backup (FR-STOR-040). Copy packs before refs: anything a copied ref points to was written before that ref, so it's already in the copy.
 
 ### Phase 5: Sign-in methods and SSO
 
@@ -338,17 +376,17 @@ Phases run in order. The first milestone that matters is **after Phase 5: good e
 - **Owner rename** (FR-NAME-054): an `owner_redirects` table. Lookup order: real owner → owner redirect, then real repository → repository redirect under the resolved owner. A real name always wins.
 - **Redirect responses:** pages and API get `301` (FR-NAME-050). Git gets a `301` on `info/refs` only (FR-NAME-051), which git follows and warns about. Non-canonical casing on pages gets `301` to the canonical form; API and git are served directly (FR-NAME-023).
 - **Transfer** (FR-REPO-021, FR-NAME-055): a direct transfer when you administer the target, otherwise a `pending_transfers` row the target owner accepts. Until Phase 7 the only targets are users, but build the acceptance flow now so organisations reuse it.
-- **Archive** (FR-REPO-022): `archived_at`. `authorize()` turns every write into a refusal, and the pre-receive hook rejects pushes with a clear message on HTTP and SSH (FR-ACL-043).
+- **Archive** (FR-REPO-022): `archived_at`. `authorize()` turns every write into a refusal, and the pre-receive check rejects pushes with a clear message on HTTP and SSH (FR-ACL-043).
 - **Soft delete and restore** (FR-REPO-023, 024): `deleted_at`, hidden from every lookup and listing. The name is freed straight away, so the unique index becomes a partial index `WHERE deleted_at IS NULL`. Restoring onto a name that has been taken since asks for a new name. A purge job removes the repository after the retention period (default 7 days).
-- **Fork** (FR-REPO-030): atomic create (Phase 1), then `git fetch <upstream path> +refs/heads/*:refs/heads/* +refs/tags/*:refs/tags/*` into the new repository. Never copy `refs/pull/*`. Record `fork_of`. A fork of a private repository is private.
-- **Import and pull mirrors** (FR-REPO-031, 033): `POST /repos/migrate` answers `202`, the repository gets `status = importing`, and a job runs `git fetch`. Mirrors are synced by a job on their interval and on `mirror-sync`. Pushes to a mirror are rejected. Mirror credentials are encrypted (NFR-SEC-042).
+- **Fork** (FR-REPO-030): atomic create (Phase 1), then copy the upstream's objects in-process (hardlink its pack files, which never change once written) and copy `refs/heads/*` and `refs/tags/*` in one `gix-ref` transaction. Never copy `refs/pull/*`. Record `fork_of`. A fork of a private repository is private.
+- **Import and pull mirrors** (FR-REPO-031, 033): `POST /repos/migrate` answers `202`, the repository gets `status = importing`, and a job fetches with the `gix` client. Mirrors are synced by a job on their interval and on `mirror-sync`. Pushes to a mirror are rejected. Mirror credentials are encrypted (NFR-SEC-042).
 - **SSRF guard** (NFR-SEC-031): one `check_outbound(url)` in `klotho-core` that resolves the host, rejects loopback, link-local, private, CGNAT and metadata addresses, and returns the pinned addresses. It's used for imports and mirrors now, and webhooks in P8.
-- **Compare** (FR-UI-008) and **blame** (FR-UI-006): compare is three-dot (merge base → head) using the P3 diff renderer. Blame runs `git blame --porcelain` under the P4 subprocess semaphore, cached by (commit, path) (NFR-PERF-030).
+- **Compare** (FR-UI-008) and **blame** (FR-UI-006): compare is three-dot (merge base → head) using the P3 diff renderer. Blame uses `gix-blame` on the blocking pool, cached by (commit, path) (NFR-PERF-030).
 - Matching API endpoints (P6 rows in [api-endpoints.md](docs/design/api-endpoints.md)), including `GET`/`DELETE` redirects (FR-NAME-056), and a `/-/settings` page per repository with a danger zone (rename, transfer, archive, delete).
 
 **Requirements:** FR-NAME-023, 024, 050–056; FR-REPO-003, 012–014, 020–024, 030, 031, 033; FR-ACL-043; FR-UI-006, 008; FR-STOR-006, 021; NFR-SEC-031, 042 (mirror credentials).
 
-**New packages:** none. `reqwest` arrives in P8. Imports and mirrors run the `git` program.
+**New packages:** the `gix` client features for fetching over HTTPS (`blocking-http-transport-reqwest`, or its async equivalent). `reqwest` itself arrives with them.
 
 **Done when:**
 - [ ] After `a → b → c`, `git clone …/a.git` clones `c` and prints git's "redirecting" warning, and `GET /api/v1/repos/me/a` returns `301` to `c`.
@@ -361,10 +399,10 @@ Phases run in order. The first milestone that matters is **after Phase 5: good e
 - [ ] Killing the server mid-rename or mid-delete leaves the database and disk consistent after restart (FR-STOR-021).
 
 > **Guide notes.**
-> - **The git subprocess is the SSRF hole.** `check_outbound()` resolving the name doesn't help if `git fetch` resolves it again (DNS rebinding) or follows a redirect. Run imports with `-c http.followRedirects=false`, pin the checked address with `-c http.curloptResolve=<host>:<port>:<ip>` (git ≥ 2.37), and set `GIT_ALLOW_PROTOCOL=https:http` so `ext::`, `file://` and `ssh://` are refused.
-> - **Keep mirror credentials out of argv and `config`.** Never put them in the URL, because that ends up in the process list and in `remote.origin.url`. Pass them for the single run through `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_0` / `GIT_CONFIG_VALUE_0` (an `http.extraHeader`), which stay out of the process list and are never written to disk.
+> - **The fetch client is the SSRF hole.** `check_outbound()` resolving the name doesn't help if the HTTP client resolves it again (DNS rebinding) or follows a redirect. The `gix` client has to use *our* resolver and no automatic redirects. Check first that gix's reqwest transport lets us supply or configure the `reqwest` client. If it doesn't, that's the first problem to solve in this phase. Allow only `https` and `http` URLs, never `file://`, `ssh://` or `ext::`.
+> - **Keep mirror credentials out of the repository.** Never put them in the URL or in the repository's `config`, where `remote.origin.url` would keep them. Give them to the `gix` client for each fetch, from the encrypted column.
 > - **Delete in a crash-safe order.** Rename the directory to `<data_dir>/repositories/.trash/<id>` first, then delete the row, then remove the trash. On startup, empty `.trash/`. Each crash point then leaves a state the next start can finish.
-> - `git fetch` from a local path uses hardlinks for objects when it can, so forks cost almost nothing until they diverge. That's fine because objects never change. Shared object pools (FR-STOR-051) can wait.
+> - Hardlinked packs make forks almost free until they diverge. Hardlinks only work within one filesystem, so fall back to copying when storage roots differ. Shared object pools (FR-STOR-051) can wait.
 
 ### Phase 7: Organisations and protection
 
@@ -394,8 +432,8 @@ Phases run in order. The first milestone that matters is **after Phase 5: good e
 - [ ] The `authorize()` table test covers owner, org owner, team, collaborator, site admin, deploy key and token-scope cases (each alone and combined).
 
 > **Guide notes.**
-> - **Detecting a force push needs the quarantine.** `old` is a force push if it isn't an ancestor of `new`, but `new` is still in quarantine during pre-receive. Run `git merge-base --is-ancestor old new` with the quarantine variables the hook forwards (Phase 4 notes), or it fails with "bad object".
-> - **Server-side ref updates must not bypass protection.** From P9, merges are written by Klotho itself, not through `receive-pack`, so no hook runs. Those writes must call `check_ref_update()` directly. Make it the only thing allowed to call `git update-ref` on behalf of a user.
+> - **Detecting a force push needs the quarantine.** `old` is a force push if it isn't an ancestor of `new`, but `new` is still in quarantine during pre-receive. Open the object database with the quarantine pack added before walking the history (gix merge base), or the new commits look missing.
+> - **Server-side ref updates must not bypass protection.** From P9, merges are written by Klotho itself, not by a push. Make `check_ref_update()` the only path to a `gix-ref` transaction on behalf of a user, for pushes and server-side writes alike.
 > - Org and team admin pages are mostly forms. Build them from the same Topcoat components as the repository settings in P6.
 
 ### Phase 8: Integrations and the Moirai
@@ -449,8 +487,8 @@ This is the biggest phase. Split it into three releases and ship each one before
 **9b: Pull requests and review**
 - PRs from a branch or a fork (FR-COLLAB-001, 002). The server writes `refs/pull/<n>/head` with `check_ref_update()` bypassed **only** for that namespace (FR-COLLAB-003). For a fork, fetch the head commit from the fork's path into the upstream. Post-receive on the head branch updates it.
 - Reject pushes to `refs/pull/*` in pre-receive (FR-GIT-024).
-- Mergeability: `git merge-tree --write-tree <base> <head>` (git ≥ 2.38, inside the 2.39 floor) needs no work tree. Cache the result by (base sha, head sha), and recompute when either side moves.
-- Merge strategies (FR-COLLAB-004): merge commit (`merge-tree` + `commit-tree` with two parents), squash (`commit-tree` with one parent), rebase (replay each commit with `merge-tree` + `commit-tree`). The ref update goes through `check_ref_update()` and `emit()`, so protection, webhooks and the thread view behave exactly as for a push.
+- Mergeability: a tree merge of base and head with `gix-merge`, in memory, no work tree. Cache the result by (base sha, head sha), and recompute when either side moves.
+- Merge strategies (FR-COLLAB-004), all with `gix-merge` plus writing commit objects: merge commit (the merged tree with two parents), squash (the merged tree with one parent), rebase (cherry-pick each commit onto the new base in turn). The ref update goes through `check_ref_update()` and `emit()`, so protection, webhooks and the thread view behave exactly as for a push.
 - Reviews (FR-COLLAB-010, 011): line comments store (commit sha, path, side, line) plus the hunk around them. A comment is outdated when a newer head changes that line. Approve, request changes and comment. **Enforce required reviews** (deferred from P7).
 - CODEOWNERS (FR-COLLAB-013): parse it from the base branch and request reviews. Closing keywords (FR-COLLAB-023) on merge.
 - Live updates (new comments, review state) use `#[shard]` components. A page reload must show the same state without JavaScript.
@@ -478,7 +516,7 @@ This is the biggest phase. Split it into three releases and ship each one before
 
 > **Guide notes.**
 > - **Server-written refs are pushes too.** Everything a `receive-pack` push triggers (protection checks, push events, webhooks, `refs/pull` updates, closing keywords) must also happen for merges done by Klotho. If both paths go through `check_ref_update()` and `emit()`, nothing gets missed.
-> - `git replay` (git 2.44+) rebases without a work tree, but it's still marked experimental. A `merge-tree` loop works on the 2.39 floor.
+> - **Check `gix-merge` against git's results.** For each strategy, the end-to-end tests should merge the same branches with the `git` client locally and compare trees. Conflict detection is where tree-merge implementations differ most.
 > - Notification fan-out (every watcher × every event) goes through the jobs table. Never send email inside a request.
 
 ### Phase 10: Operations polish
@@ -487,8 +525,8 @@ This is the biggest phase. Split it into three releases and ship each one before
 
 - **Metrics** (NFR-OPS-021): `/-/metrics` behind a metrics token. Request counts and latency by **route template** (`MatchedPath`), git operations by type and result, running subprocesses and queue depth, job queue depth, storage usage per root.
 - **JSON logs** (NFR-OPS-020): the `json` feature of `tracing-subscriber`, chosen in config. The request ID from P0 is in every line.
-- **Housekeeping** (FR-STOR-031): a job per repository on a schedule and after N pushes. It runs `git maintenance run` with `gc`, `commit-graph` (with `--changed-paths` Bloom filters, which make path-filtered history fast; NFR-PERF-014), and `pack-refs`. Bitmaps are written on repack.
-- **Integrity checks** (FR-STOR-030): scheduled `git fsck` jobs. Failures go to the admin dashboard and the log.
+- **Housekeeping** (FR-STOR-031): a job per repository on a schedule and after N pushes. gitoxide has no repack or gc, so this is ours: consolidate packs and loose objects into one pack with `gix-pack`'s output pipeline (with delta search, which `gix-pack` lacks today, so this is also where NFR-PERF-001 gets its fix), drop unreachable objects past a grace period, write a commit-graph (with changed-path Bloom filters, which make path-filtered history fast; NFR-PERF-014), and pack refs.
+- **Integrity checks** (FR-STOR-030): scheduled jobs that check connectivity from every ref and that every object decodes. Failures go to the admin dashboard and the log.
 - **Quotas** (FR-STOR-050): per owner and per repository, counting git data plus LFS. Pre-receive estimates the push from the size of the quarantine directory and rejects it with the quota and current usage.
 - **Git LFS** (FR-GIT-030): the batch API and basic transfer. Objects are stored in `FileStore` at `lfs/<oid[0:2]>/<oid[2:4]>/<oid>`. Uploads are hashed while streaming and rejected on mismatch. Downloads use presigned URLs on S3. Each repository is linked to its objects through `lfs_objects(repo_id, oid)`, and forks copy the links.
 - **LFS over SSH:** implement the `git-lfs-authenticate` command in the SSH server, which returns an HTTPS `href` and a short-lived token.
@@ -512,7 +550,8 @@ This is the biggest phase. Split it into three releases and ship each one before
 > **Guide notes.**
 > - **Label cardinality.** Never put the raw path, an owner or a repository name in a metric label. Use axum's `MatchedPath` (`/{owner}/{repo}/git-upload-pack`) and put per-repository numbers in logs instead.
 > - **The PostgreSQL work is bigger than it looks**, because every query is written twice. If it slips, ship the rest of Phase 10 without it: SQLite with WAL covers the reference dataset (NFR-PERF-023).
-> - **Consider moving commit-graph writing earlier.** Path-filtered history in P3 is slow on large repositories without it. Writing a commit graph after each push (a P6 job) is a few lines.
+> - **Repack is the riskiest job here**, because it deletes data. Write the new pack and its index, fsync them, and only then remove the old packs. Never remove an object that a pack being written by a concurrent push might reference: hold a per-repository lock that pushes also take while they move their pack out of quarantine.
+> - **Consider moving commit-graph writing earlier.** Path-filtered history in P3 is slow on large repositories without it. Check whether gitoxide can write commit-graphs; if not, that's another piece we write ourselves.
 
 ---
 
@@ -520,5 +559,5 @@ This is the biggest phase. Split it into three releases and ship each one before
 
 - **UI and API move together.** A PR that adds a UI action adds the API endpoint in the same PR, both calling the same `klotho-core` service (FR-API-004). Account security pages are the only exception.
 - **Every change names the requirement IDs it implements**, in the commit message or PR description. When code and requirements disagree, update the requirement or file a conflict. Don't let them drift silently.
-- **End-to-end tests use real git.** Anything touching transport or auth gets a test in `tests/` that runs the actual `git` program against the actual binary. Mocks won't catch protocol bugs.
+- **End-to-end tests use the real git client.** Anything touching transport or auth gets a test in `tests/` that runs the actual `git` program against the actual binary. Klotho itself never runs `git` (ADR 0004), but the client is the reference implementation it has to interoperate with, and mocks won't catch protocol bugs.
 - **Update the conflict tables.** When a phase fixes a conflict listed in `docs/requirements/*.md`, remove the row in the same PR.

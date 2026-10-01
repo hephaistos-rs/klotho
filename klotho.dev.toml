@@ -1,0 +1,9 @@
+# Development config, used by `cargo run` (see .cargo/config.toml).
+# Every setting is documented in klotho.example.toml.
+
+[storage]
+# Resolved against this file's folder, so it's <repository root>/testRepos.
+data_dir = "testRepos"
+
+[log]
+filter = "klotho=debug,tower_http=debug"

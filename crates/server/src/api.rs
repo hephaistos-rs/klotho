@@ -17,17 +17,20 @@ use axum::{Json, Router};
 use klotho_git::{CommitInfo, RepoInfo, RepoName, RepoStore, TreeEntryInfo};
 use serde::Deserialize;
 
+use crate::AppState;
 use crate::error::AppError;
 
 const MAX_COMMITS: usize = 500;
 
-pub fn router() -> Router<RepoStore> {
+pub fn router() -> Router<AppState> {
     Router::new()
         .route("/repos", get(list_repos).post(create_repo))
         .route("/repos/{repo}", get(repo_info))
         .route("/repos/{repo}/commits", get(commits))
         .route("/repos/{repo}/tree", get(tree))
         .route("/repos/{repo}/raw", get(raw))
+        // Unknown API paths get JSON, not the web UI's HTML 404 (FR-UI-050).
+        .fallback(|| async { (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "not found" }))) })
 }
 
 #[derive(Deserialize)]
@@ -94,8 +97,7 @@ async fn tree(
     Query(query): Query<RevQuery>,
 ) -> Result<Json<Vec<TreeEntryInfo>>, AppError> {
     let name: RepoName = repo.parse()?;
-    let entries =
-        blocking(move || TreeEntryInfo::list(&store.open(&name)?, &query.rev, &query.path)).await?;
+    let entries = blocking(move || TreeEntryInfo::list(&store.open(&name)?, &query.rev, &query.path)).await?;
     Ok(Json(entries))
 }
 

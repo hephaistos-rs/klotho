@@ -31,14 +31,8 @@ impl FromStr for RepoName {
         let valid = !name.is_empty()
             && name.len() <= Self::MAX_LEN
             && !name.starts_with(['.', '-'])
-            && name
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
-        if valid {
-            Ok(Self(name.to_owned()))
-        } else {
-            Err(Error::InvalidName(s.to_owned()))
-        }
+            && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+        if valid { Ok(Self(name.to_owned())) } else { Err(Error::InvalidName(s.to_owned())) }
     }
 }
 

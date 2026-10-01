@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# Note: klotho-web's build script downloads the Tailwind CLI from GitHub releases,
+# so builds need network access.
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt, clippy, test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux is the production platform; Windows is where Klotho is developed
+        # (NFR-OPS-002).
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: git version (the tests run real git)
+        run: git --version
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  dist:
+    name: single-binary release build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install the Topcoat CLI
+        run: cargo install topcoat-cli --version 0.9.0 --locked
+      # Builds twice to embed the asset bundle, then starts the binary alone in an
+      # empty folder and checks it serves the home page and its stylesheet.
+      - run: cargo xtask dist

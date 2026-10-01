@@ -42,27 +42,17 @@ pub struct TreeEntryInfo {
 impl RepoInfo {
     pub fn read(repo: &gix::Repository, name: &RepoName) -> Result<Self> {
         let head = repo.head().map_err(Error::git)?;
-        let default_branch = head
-            .referent_name()
-            .map(|name| name.shorten().to_string());
+        let default_branch = head.referent_name().map(|name| name.shorten().to_string());
 
         let mut refs = Vec::new();
         let platform = repo.references().map_err(Error::git)?;
         for reference in platform.all().map_err(Error::git)? {
             let mut reference = reference.map_err(Error::Git)?;
             let target = reference.peel_to_id().map_err(Error::git)?;
-            refs.push(RefInfo {
-                name: reference.name().as_bstr().to_string(),
-                target: target.to_string(),
-            });
+            refs.push(RefInfo { name: reference.name().as_bstr().to_string(), target: target.to_string() });
         }
 
-        Ok(Self {
-            name: name.to_string(),
-            default_branch,
-            empty: head.is_unborn(),
-            refs,
-        })
+        Ok(Self { name: name.to_string(), default_branch, empty: head.is_unborn(), refs })
     }
 }
 
@@ -107,11 +97,7 @@ impl TreeEntryInfo {
                 .map_err(Error::git)?
                 .filter(|entry| entry.mode().is_tree())
                 .ok_or_else(|| Error::PathNotFound(path.to_owned()))?;
-            entry
-                .object()
-                .map_err(Error::git)?
-                .try_into_tree()
-                .map_err(Error::git)?
+            entry.object().map_err(Error::git)?.try_into_tree().map_err(Error::git)?
         };
 
         tree.iter()

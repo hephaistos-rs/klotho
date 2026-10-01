@@ -1,6 +1,6 @@
 # ADR 0001: Technology stack
 
-- **Status:** accepted; the *Frontend* section is superseded by [ADR 0002](0002-topcoat-ui.md) (2026-10-01)
+- **Status:** accepted; the *Frontend* section is superseded by [ADR 0002](0002-topcoat-ui.md) and the *Git* section by [ADR 0004](0004-native-git-transport.md) (both 2026-10-01)
 - **Date:** 2026-09-30
 
 ## Context
@@ -18,6 +18,8 @@ We also want to avoid adopting frameworks for their own sake.
 ## Decision
 
 ### Git: gix for reading, the `git` program for the wire protocol
+
+> **Superseded by [ADR 0004](0004-native-git-transport.md).** Klotho does all git work in-process with gitoxide and never runs the `git` program. This section is kept for the record.
 
 - **gix** reads repositories: refs, commits, trees, blobs and diffs.
 - **`git upload-pack` / `git receive-pack`**, run as subprocesses, serve clone, fetch and push over both HTTP and SSH.
