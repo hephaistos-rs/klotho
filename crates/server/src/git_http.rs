@@ -1,8 +1,9 @@
-//! Git's "smart HTTP" protocol, so `git clone/fetch/push http://host/<repo>.git` work.
+//! Git's "smart HTTP" protocol, so `git clone/fetch/push http://host/<owner>/<repo>.git`
+//! work. `.git` is optional and names are case-insensitive (FR-NAME-021, 040).
 //!
-//! gix has no server-side protocol support, so like `git http-backend` this hands
-//! each request to `git upload-pack` (clone/fetch) or `git receive-pack` (push)
-//! and pipes the request and response bodies through.
+//! Interim: like `git http-backend`, this hands each request to `git upload-pack`
+//! (clone/fetch) or `git receive-pack` (push) and pipes the bodies through. The
+//! native engine of Phase 1b replaces it (ADR 0004).
 //!
 //! See <https://git-scm.com/docs/http-protocol>.
 //!
@@ -20,7 +21,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use futures_util::TryStreamExt;
-use klotho_git::{RepoName, RepoStore};
+use klotho_core::Core;
 use serde::Deserialize;
 use tokio::io::AsyncRead;
 use tokio::process::Command;
@@ -28,13 +29,19 @@ use tokio_util::io::{ReaderStream, StreamReader};
 use tokio_util::task::TaskTracker;
 
 use crate::AppState;
-use crate::error::AppError;
+use crate::error::ApiError;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/{repo}/info/refs", get(info_refs))
-        .route("/{repo}/git-upload-pack", post(|s, t, p, h, b| rpc(Service::UploadPack, s, t, p, h, b)))
-        .route("/{repo}/git-receive-pack", post(|s, t, p, h, b| rpc(Service::ReceivePack, s, t, p, h, b)))
+        .route("/{owner}/{repo}/info/refs", get(info_refs))
+        .route(
+            "/{owner}/{repo}/git-upload-pack",
+            post(|s, t, p, h, b| rpc(Service::UploadPack, s, t, p, h, b)),
+        )
+        .route(
+            "/{owner}/{repo}/git-receive-pack",
+            post(|s, t, p, h, b| rpc(Service::ReceivePack, s, t, p, h, b)),
+        )
         // Pushes can be arbitrarily large.
         .layer(DefaultBodyLimit::disable())
 }
@@ -82,24 +89,21 @@ struct InfoRefsQuery {
 
 /// First request of every clone/fetch/push: lists the repo's refs and capabilities.
 async fn info_refs(
-    State(store): State<RepoStore>,
-    Path(repo): Path<String>,
+    State(core): State<Core>,
+    Path((owner, repo)): Path<(String, String)>,
     Query(query): Query<InfoRefsQuery>,
     headers: HeaderMap,
-) -> Result<Response, AppError> {
+) -> Result<Response, ApiError> {
     let Some(service) = query.service.as_deref().and_then(Service::from_query) else {
         return Ok((StatusCode::FORBIDDEN, "only the smart HTTP protocol is supported").into_response());
     };
-    let repo_path = repo_path(&store, &repo)?;
+    let repo_path = repo_path(&core, &owner, &repo).await?;
     let protocol = git_protocol(&headers);
 
     let output = service.command(&repo_path, protocol, true).stderr(Stdio::inherit()).output().await?;
     if !output.status.success() {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "git {} --advertise-refs exited with {}",
-            service.name(),
-            output.status
-        )));
+        let message = format!("git {} --advertise-refs exited with {}", service.name(), output.status);
+        return Err(std::io::Error::other(message).into());
     }
 
     // Protocol v2 responses start directly with the capability list; v0/v1 need
@@ -117,13 +121,13 @@ async fn info_refs(
 /// The actual fetch negotiation or push, streamed through the git process.
 async fn rpc(
     service: Service,
-    State(store): State<RepoStore>,
+    State(core): State<Core>,
     State(git_tasks): State<TaskTracker>,
-    Path(repo): Path<String>,
+    Path((owner, repo)): Path<(String, String)>,
     headers: HeaderMap,
     body: Body,
-) -> Result<Response, AppError> {
-    let repo_path = repo_path(&store, &repo)?;
+) -> Result<Response, ApiError> {
+    let repo_path = repo_path(&core, &owner, &repo).await?;
     let expected = format!("application/x-git-{}-request", service.name());
     if headers.get(header::CONTENT_TYPE).is_none_or(|v| v != expected.as_str()) {
         return Ok(StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response());
@@ -164,12 +168,11 @@ async fn rpc(
     Ok(git_response(&content_type, Body::from_stream(ReaderStream::new(stdout))))
 }
 
-fn repo_path(store: &RepoStore, repo: &str) -> Result<std::path::PathBuf, AppError> {
-    let name: RepoName = repo.parse()?;
-    if !store.exists(&name) {
-        return Err(klotho_git::Error::RepoNotFound(name.to_string()).into());
-    }
-    Ok(store.path(&name))
+/// The on-disk path of `owner/repo`. The path comes from the repository's ID, so
+/// nothing from the URL ever reaches the filesystem or git's arguments.
+async fn repo_path(core: &Core, owner: &str, repo: &str) -> Result<std::path::PathBuf, ApiError> {
+    let repo = core.find_repo(owner, repo).await?;
+    Ok(core.store().path(repo.id))
 }
 
 /// The client's `Git-Protocol` header, passed to git as `GIT_PROTOCOL` so protocol

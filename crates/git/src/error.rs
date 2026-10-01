@@ -2,12 +2,12 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("invalid repository name {0:?}")]
-    InvalidName(String),
     #[error("repository {0} not found")]
     RepoNotFound(String),
     #[error("repository {0} already exists")]
     RepoExists(String),
+    #[error("{0:?} is not a bare repository under the storage root")]
+    NotARepository(String),
     #[error("revision {0:?} not found")]
     RevisionNotFound(String),
     #[error("path {0:?} not found")]

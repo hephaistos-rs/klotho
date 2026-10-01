@@ -56,6 +56,6 @@ Checked against commit `6b4895f`.
 | Requirement | Current behaviour | Where |
 |---|---|---|
 | FR-ACL-001 (push requires write) | **Conflict (critical).** `git-receive-pack` is served to any anonymous client, so anyone who can reach the port can push, overwrite branches or delete refs. | [git_http.rs:31-38](../../crates/server/src/git_http.rs#L31-L38) |
-| FR-ACL-011 (private repos invisible) | **Conflict.** There is no visibility setting, so every repository is effectively public and is listed by `GET /api/repos`. | [api.rs:58-61](../../crates/server/src/api.rs#L58-L61) |
+| FR-ACL-011 (private repos invisible) | **Conflict.** There is no visibility setting, so every repository is effectively public and is listed by `GET /api/v1/users/{username}/repos`. | [api.rs](../../crates/server/src/api.rs) (`user_repos`) |
 
 The default bind address of `127.0.0.1` limits the exposure while there is no access control. Changing `KLOTHO_ADDR` to a public interface exposes every repository to writes.

@@ -1,41 +1,90 @@
-//! JSON API for managing and browsing repositories.
+//! The JSON API, `/api/v1` (docs/design/api-endpoints.md).
 //!
-//! | Method | Path                          | Query                 |
-//! |--------|-------------------------------|-----------------------|
-//! | GET    | `/api/repos`                  |                       |
-//! | POST   | `/api/repos`                  | body: `{"name": ..}`  |
-//! | GET    | `/api/repos/{repo}`           |                       |
-//! | GET    | `/api/repos/{repo}/commits`   | `rev`, `limit`        |
-//! | GET    | `/api/repos/{repo}/tree`      | `rev`, `path`         |
-//! | GET    | `/api/repos/{repo}/raw`       | `rev`, `path`         |
+//! | Method      | Path                                       | Notes                       |
+//! |-------------|--------------------------------------------|-----------------------------|
+//! | GET         | `/repos/{owner}/{repo}`                    | FR-API-010 resource         |
+//! | GET         | `/repos/{owner}/{repo}/commits`            | `rev`, `limit`              |
+//! | GET         | `/repos/{owner}/{repo}/tree`               | `rev`, `path`               |
+//! | GET         | `/repos/{owner}/{repo}/raw`                | `rev`, `path`               |
+//! | GET         | `/users/{username}/repos`                  | `limit`, `cursor`; `Link`   |
+//! | POST        | `/admin/users`                             | `{"username"}`              |
+//! | POST        | `/admin/users/{username}/repos`            | `{"name"}`                  |
+//! | GET         | `/admin/unadopted`                         | FR-STOR-020                 |
+//! | POST/DELETE | `/admin/unadopted/{*path}`                 | adopt `{"owner", "name"?}`  |
+//!
+//! There's no authentication until Phase 2, so the admin endpoints are open to
+//! anyone who can reach the server, like pushing is.
 
 use axum::extract::{Path, Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
-use klotho_git::{CommitInfo, RepoInfo, RepoName, RepoStore, TreeEntryInfo};
-use serde::Deserialize;
+use klotho_core::{Core, Owner, Repo, StorageReport};
+use klotho_git::{CommitInfo, RepoInfo, TreeEntryInfo};
+use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::error::AppError;
+use crate::error::ApiError;
 
 const MAX_COMMITS: usize = 500;
+/// Page sizes (FR-API-020).
+const DEFAULT_PAGE: u32 = 30;
+const MAX_PAGE: u32 = 100;
 
+/// The `/api` router: version 1, plus JSON 404s for anything else under `/api`
+/// so it never falls through to the web UI's HTML pages (FR-UI-050).
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/repos", get(list_repos).post(create_repo))
-        .route("/repos/{repo}", get(repo_info))
-        .route("/repos/{repo}/commits", get(commits))
-        .route("/repos/{repo}/tree", get(tree))
-        .route("/repos/{repo}/raw", get(raw))
-        // Unknown API paths get JSON, not the web UI's HTML 404 (FR-UI-050).
-        .fallback(|| async { (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "not found" }))) })
+    let v1 = Router::new()
+        .route("/repos/{owner}/{repo}", get(repo))
+        .route("/repos/{owner}/{repo}/commits", get(commits))
+        .route("/repos/{owner}/{repo}/tree", get(tree))
+        .route("/repos/{owner}/{repo}/raw", get(raw))
+        .route("/users/{username}/repos", get(user_repos))
+        .route("/admin/users", post(create_user))
+        .route("/admin/users/{username}/repos", post(create_repo))
+        .route("/admin/unadopted", get(unadopted))
+        .route("/admin/unadopted/{*path}", post(adopt).delete(delete_unadopted));
+    Router::new().nest("/v1", v1).fallback(|| async { ApiError::not_found() })
 }
 
-#[derive(Deserialize)]
-struct CreateRepo {
+/// A repository as the API returns it (FR-API-010).
+#[derive(Serialize)]
+struct RepoResource {
+    id: i64,
+    owner: Owner,
     name: String,
+    full_name: String,
+    /// Always false until visibility arrives in Phase 2.
+    private: bool,
+    /// The branch HEAD points at, even if it has no commits yet.
+    default_branch: Option<String>,
+    empty: bool,
+    html_url: String,
+    clone_url: String,
+    ssh_url: String,
+    created_at: jiff::Timestamp,
+}
+
+impl RepoResource {
+    async fn build(core: &Core, repo: Repo) -> Result<Self, ApiError> {
+        let info = core.with_git(&repo, RepoInfo::read).await?;
+        let full_name = repo.full_name();
+        let urls = core.urls();
+        Ok(Self {
+            id: repo.id,
+            html_url: urls.html(&full_name),
+            clone_url: urls.clone(&full_name),
+            ssh_url: urls.ssh(&full_name),
+            owner: repo.owner,
+            name: repo.name,
+            full_name,
+            private: false,
+            default_branch: info.default_branch,
+            empty: info.empty,
+            created_at: repo.created_at,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -51,63 +100,140 @@ fn default_rev() -> String {
     "HEAD".to_owned()
 }
 
-/// gix is synchronous, so repository work runs on the blocking thread pool.
-async fn blocking<T: Send + 'static>(
-    f: impl FnOnce() -> klotho_git::Result<T> + Send + 'static,
-) -> Result<T, AppError> {
-    Ok(tokio::task::spawn_blocking(f).await??)
-}
-
-async fn list_repos(State(store): State<RepoStore>) -> Result<Json<Vec<String>>, AppError> {
-    let names = blocking(move || store.list()).await?;
-    Ok(Json(names.iter().map(ToString::to_string).collect()))
-}
-
-async fn create_repo(
-    State(store): State<RepoStore>,
-    Json(body): Json<CreateRepo>,
-) -> Result<(StatusCode, Json<RepoInfo>), AppError> {
-    let name: RepoName = body.name.parse()?;
-    let info = blocking(move || RepoInfo::read(&store.create(&name)?, &name)).await?;
-    Ok((StatusCode::CREATED, Json(info)))
-}
-
-async fn repo_info(
-    State(store): State<RepoStore>,
-    Path(repo): Path<String>,
-) -> Result<Json<RepoInfo>, AppError> {
-    let name: RepoName = repo.parse()?;
-    Ok(Json(blocking(move || RepoInfo::read(&store.open(&name)?, &name)).await?))
+async fn repo(
+    State(core): State<Core>,
+    Path((owner, name)): Path<(String, String)>,
+) -> Result<Json<RepoResource>, ApiError> {
+    let repo = core.find_repo(&owner, &name).await?;
+    Ok(Json(RepoResource::build(&core, repo).await?))
 }
 
 async fn commits(
-    State(store): State<RepoStore>,
-    Path(repo): Path<String>,
+    State(core): State<Core>,
+    Path((owner, name)): Path<(String, String)>,
     Query(query): Query<RevQuery>,
-) -> Result<Json<Vec<CommitInfo>>, AppError> {
-    let name: RepoName = repo.parse()?;
+) -> Result<Json<Vec<CommitInfo>>, ApiError> {
+    let repo = core.find_repo(&owner, &name).await?;
     let limit = query.limit.unwrap_or(30).min(MAX_COMMITS);
-    let commits = blocking(move || CommitInfo::log(&store.open(&name)?, &query.rev, limit)).await?;
-    Ok(Json(commits))
+    Ok(Json(core.with_git(&repo, move |git| CommitInfo::log(git, &query.rev, limit)).await?))
 }
 
 async fn tree(
-    State(store): State<RepoStore>,
-    Path(repo): Path<String>,
+    State(core): State<Core>,
+    Path((owner, name)): Path<(String, String)>,
     Query(query): Query<RevQuery>,
-) -> Result<Json<Vec<TreeEntryInfo>>, AppError> {
-    let name: RepoName = repo.parse()?;
-    let entries = blocking(move || TreeEntryInfo::list(&store.open(&name)?, &query.rev, &query.path)).await?;
-    Ok(Json(entries))
+) -> Result<Json<Vec<TreeEntryInfo>>, ApiError> {
+    let repo = core.find_repo(&owner, &name).await?;
+    Ok(Json(core.with_git(&repo, move |git| TreeEntryInfo::list(git, &query.rev, &query.path)).await?))
 }
 
 async fn raw(
-    State(store): State<RepoStore>,
-    Path(repo): Path<String>,
+    State(core): State<Core>,
+    Path((owner, name)): Path<(String, String)>,
     Query(query): Query<RevQuery>,
-) -> Result<impl IntoResponse, AppError> {
-    let name: RepoName = repo.parse()?;
-    let data = blocking(move || klotho_git::read_blob(&store.open(&name)?, &query.rev, &query.path)).await?;
-    // Always octet-stream so a stored HTML file can't run as a page on this origin.
-    Ok(([(header::CONTENT_TYPE, "application/octet-stream")], data))
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = core.find_repo(&owner, &name).await?;
+    let data = core.with_git(&repo, move |git| klotho_git::read_blob(git, &query.rev, &query.path)).await?;
+    // Always octet-stream with nosniff, so a pushed HTML file can't run as a page
+    // on this origin (NFR-SEC-010).
+    Ok((
+        [(header::CONTENT_TYPE, "application/octet-stream"), (header::X_CONTENT_TYPE_OPTIONS, "nosniff")],
+        data,
+    ))
+}
+
+#[derive(Deserialize)]
+struct PageQuery {
+    limit: Option<u32>,
+    /// From the previous page's `Link: <…>; rel="next"`.
+    cursor: Option<String>,
+}
+
+/// An owner's repositories, one page at a time, with an RFC 8288 `Link` header
+/// to the next page (FR-API-020, 021).
+async fn user_repos(
+    State(core): State<Core>,
+    Path(username): Path<String>,
+    Query(page): Query<PageQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let limit = page.limit.unwrap_or(DEFAULT_PAGE).clamp(1, MAX_PAGE);
+    let repos = core.list_repos(&username, page.cursor.as_deref(), limit).await?;
+
+    let mut headers = HeaderMap::new();
+    if repos.len() == limit as usize
+        && let Some(last) = repos.last()
+    {
+        let cursor = last.name.to_ascii_lowercase();
+        let next = core.urls().api(&format!("/users/{username}/repos?limit={limit}&cursor={cursor}"));
+        if let Ok(link) = HeaderValue::from_str(&format!("<{next}>; rel=\"next\"")) {
+            headers.insert(header::LINK, link);
+        }
+    }
+    let mut resources = Vec::with_capacity(repos.len());
+    for repo in repos {
+        resources.push(RepoResource::build(&core, repo).await?);
+    }
+    Ok((headers, Json(resources)))
+}
+
+#[derive(Deserialize)]
+struct CreateUser {
+    username: String,
+}
+
+async fn create_user(
+    State(core): State<Core>,
+    Json(body): Json<CreateUser>,
+) -> Result<(StatusCode, Json<Owner>), ApiError> {
+    Ok((StatusCode::CREATED, Json(core.create_user(&body.username).await?)))
+}
+
+#[derive(Deserialize)]
+struct CreateRepo {
+    name: String,
+}
+
+/// Creates a repository owned by `username`, as Gitea's
+/// `POST /admin/users/{username}/repos` does.
+async fn create_repo(
+    State(core): State<Core>,
+    Path(username): Path<String>,
+    Json(body): Json<CreateRepo>,
+) -> Result<(StatusCode, Json<RepoResource>), ApiError> {
+    let repo = core.create_repo(&username, &body.name).await?;
+    Ok((StatusCode::CREATED, Json(RepoResource::build(&core, repo).await?)))
+}
+
+#[derive(Serialize)]
+struct StorageReportResource {
+    unadopted: Vec<String>,
+    missing: Vec<String>,
+}
+
+async fn unadopted(State(core): State<Core>) -> Result<Json<StorageReportResource>, ApiError> {
+    let StorageReport { unadopted, missing } = core.storage_report().await?;
+    Ok(Json(StorageReportResource { unadopted, missing: missing.iter().map(Repo::full_name).collect() }))
+}
+
+#[derive(Deserialize)]
+struct Adopt {
+    owner: String,
+    name: Option<String>,
+}
+
+async fn adopt(
+    State(core): State<Core>,
+    Path(path): Path<String>,
+    Json(body): Json<Adopt>,
+) -> Result<(StatusCode, Json<RepoResource>), ApiError> {
+    let repo = core.adopt(&path, &body.owner, body.name.as_deref()).await?;
+    Ok((StatusCode::CREATED, Json(RepoResource::build(&core, repo).await?)))
+}
+
+async fn delete_unadopted(
+    State(core): State<Core>,
+    Path(path): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    core.delete_unadopted(&path).await?;
+    Ok(StatusCode::NO_CONTENT)
 }

@@ -70,10 +70,9 @@ Requirements that simply haven't been implemented yet are not listed as conflict
 
 ## Most important conflicts today
 
-Checked after Phase 0 (2026-10-01). Graceful shutdown, the config file and the data directory were fixed in Phase 0.
+Checked after Phase 1 (2026-10-01). Phase 0 fixed graceful shutdown, the config file and the data directory. Phase 1 fixed name casing, Windows device names, atomic creation and unregistered repositories.
 
-1. **Anyone can push.** There is no authentication or authorisation on git or the API ([FR-ACL-001](requirements/access-control.md), [FR-AUTH-020](requirements/auth.md)). The default address is `0.0.0.0`, so that includes anyone on the network ([NFR-OPS-012](requirements/operations.md)).
-2. **Casing is discarded.** `MyRepo` is stored and shown as `myrepo` ([FR-NAME-020](requirements/naming.md)). Fixing it needs a metadata store ([FR-STOR-001](requirements/storage.md)).
-3. **Repositories named `con`, `nul`, `aux`, … can be created on Windows but can't be cloned** (verified: HTTP 500) ([FR-STOR-007](requirements/storage.md)).
-4. **Repository creation isn't atomic** ([FR-STOR-005](requirements/storage.md)), and **pushes have no size limit or subprocess cap** ([NFR-SEC-020](requirements/security.md), [NFR-SEC-022](requirements/security.md)).
-5. **Git transport still runs the `git` program**, which [ADR 0004](decisions/0004-native-git-transport.md) replaces with an in-process engine (roadmap Phase 1b).
+1. **Anyone can push, and create users and repositories.** There is no authentication or authorisation on git or the API, including the `/api/v1/admin` endpoints ([FR-ACL-001](requirements/access-control.md), [FR-AUTH-020](requirements/auth.md), [FR-REPO-001](requirements/repositories.md)). The default address is `0.0.0.0`, so that includes anyone on the network ([NFR-OPS-012](requirements/operations.md)).
+2. **Pushes have no size limit or subprocess cap** ([NFR-SEC-020](requirements/security.md), [NFR-SEC-022](requirements/security.md)).
+3. **Git transport still runs the `git` program**, which [ADR 0004](decisions/0004-native-git-transport.md) replaces with an in-process engine (roadmap Phase 1b). Until then, push durability depends on git's defaults ([NFR-STOR-001](requirements/storage.md)).
+4. **Raw file downloads are loaded fully into memory** ([NFR-PERF-013](requirements/performance.md)).

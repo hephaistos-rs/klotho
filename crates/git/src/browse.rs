@@ -3,11 +3,10 @@
 use gix::objs::tree::EntryKind;
 use serde::Serialize;
 
-use crate::{Error, RepoName, Result};
+use crate::{Error, Result};
 
 #[derive(Debug, Serialize)]
 pub struct RepoInfo {
-    pub name: String,
     /// The branch HEAD points at, e.g. `main`, even if it has no commits yet.
     pub default_branch: Option<String>,
     pub empty: bool,
@@ -40,7 +39,7 @@ pub struct TreeEntryInfo {
 }
 
 impl RepoInfo {
-    pub fn read(repo: &gix::Repository, name: &RepoName) -> Result<Self> {
+    pub fn read(repo: &gix::Repository) -> Result<Self> {
         let head = repo.head().map_err(Error::git)?;
         let default_branch = head.referent_name().map(|name| name.shorten().to_string());
 
@@ -52,7 +51,7 @@ impl RepoInfo {
             refs.push(RefInfo { name: reference.name().as_bstr().to_string(), target: target.to_string() });
         }
 
-        Ok(Self { name: name.to_string(), default_branch, empty: head.is_unborn(), refs })
+        Ok(Self { default_branch, empty: head.is_unborn(), refs })
     }
 }
 

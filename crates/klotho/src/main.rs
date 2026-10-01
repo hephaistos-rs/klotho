@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use klotho_git::RepoStore;
+use klotho_core::{Core, Urls};
 use klotho_server::AppState;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
@@ -27,8 +27,29 @@ struct Cli {
 enum Command {
     /// Run the server.
     Serve,
-    /// Administration tasks that work without the web UI. None yet.
-    Admin,
+    /// Administration tasks that work without the web UI or the server running
+    /// (NFR-OPS-033).
+    #[command(subcommand)]
+    Admin(Admin),
+}
+
+#[derive(Subcommand)]
+enum Admin {
+    /// Create a user.
+    CreateUser { username: String },
+    /// List repositories on disk that aren't registered, and registered ones whose
+    /// directory is missing.
+    Unadopted,
+    /// Register a repository from `admin unadopted` under an owner.
+    Adopt {
+        /// The path `admin unadopted` printed, e.g. `demo.git`.
+        path: String,
+        #[arg(long)]
+        owner: String,
+        /// The repository name. Defaults to the directory name without `.git`.
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -42,12 +63,58 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => serve(loaded).await,
-        Command::Admin => anyhow::bail!("there are no admin commands yet"),
+        Command::Admin(admin) => run_admin(open_core(&loaded).await?, admin).await,
     }
 }
 
+/// Opens the database (migrating it) and the repository store.
+async fn open_core(loaded: &config::Loaded) -> anyhow::Result<Core> {
+    let urls = Urls::new(&loaded.config.server.public_url).map_err(anyhow::Error::msg)?;
+    let paths = loaded.config.storage.resolve(&loaded.base_dir);
+    tracing::info!(
+        data_dir = %paths.data_dir.display(),
+        repositories = %paths.repositories.display(),
+        database = %paths.database.display(),
+        files = %paths.files.display(),
+        "data locations"
+    );
+    Core::open(&paths, urls)
+        .await
+        .with_context(|| format!("can't open the data in {}", paths.data_dir.display()))
+}
+
+async fn run_admin(core: Core, admin: Admin) -> anyhow::Result<()> {
+    match admin {
+        Admin::CreateUser { username } => {
+            let user = core.create_user(&username).await?;
+            println!("created user {} (id {})", user.name, user.id);
+        }
+        Admin::Unadopted => {
+            let report = core.storage_report().await?;
+            for path in &report.unadopted {
+                println!("unadopted  {path}");
+            }
+            for repo in &report.missing {
+                println!(
+                    "missing    {} (id {}, expected at {})",
+                    repo.full_name(),
+                    repo.id,
+                    core.store().path(repo.id).display()
+                );
+            }
+            if report.unadopted.is_empty() && report.missing.is_empty() {
+                println!("storage and database agree");
+            }
+        }
+        Admin::Adopt { path, owner, name } => {
+            let repo = core.adopt(&path, &owner, name.as_deref()).await?;
+            println!("adopted {path} as {} (id {})", repo.full_name(), repo.id);
+        }
+    }
+    Ok(())
+}
+
 async fn serve(loaded: config::Loaded) -> anyhow::Result<()> {
-    let config = loaded.config;
     match &loaded.file {
         Some(file) => tracing::info!(file = %file.display(), "loaded config"),
         None => tracing::warn!(
@@ -59,18 +126,19 @@ async fn serve(loaded: config::Loaded) -> anyhow::Result<()> {
     let git = klotho_git::check_git()?;
     tracing::info!(%git, "found git");
 
-    let paths = config.storage.resolve(&loaded.base_dir);
-    tracing::info!(
-        data_dir = %paths.data_dir.display(),
-        repositories = %paths.repositories.display(),
-        database = %paths.database.display(),
-        files = %paths.files.display(),
-        "data locations"
-    );
-    let store = RepoStore::new(&paths.repositories)
-        .with_context(|| format!("can't use {} for repositories", paths.repositories.display()))?;
+    let core = open_core(&loaded).await?;
+    // Disk and database disagreeing is reported, never silently ignored (FR-STOR-020).
+    let report = core.storage_report().await?;
+    if !report.unadopted.is_empty() || !report.missing.is_empty() {
+        tracing::warn!(
+            unadopted = report.unadopted.len(),
+            missing = report.missing.len(),
+            "repository storage and database disagree; see `klotho admin unadopted`"
+        );
+    }
 
-    let state = AppState::new(store);
+    let config = loaded.config;
+    let state = AppState::new(core);
     let git_tasks = state.git_tasks.clone();
     let app = klotho_server::build_app(state, &config.server);
 

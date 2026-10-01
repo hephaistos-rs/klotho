@@ -16,12 +16,12 @@ use tower::Service;
 
 use crate::AppState;
 
-#[cfg(not(feature = "embed-assets"))]
+#[cfg(not(embed_assets))]
 pub fn router() -> Router<AppState> {
     mount(klotho_web::service(klotho_web::Assets::NextToBinary), Router::new())
 }
 
-#[cfg(feature = "embed-assets")]
+#[cfg(embed_assets)]
 pub fn router() -> Router<AppState> {
     let assets = klotho_web::Assets::Hosted { base_url: embedded::BASE_URL, manifest: embedded::MANIFEST };
     let routes = Router::new().route("/-/assets/{*file}", axum::routing::get(embedded::serve));
@@ -54,7 +54,7 @@ where
     }
 }
 
-#[cfg(feature = "embed-assets")]
+#[cfg(embed_assets)]
 mod embedded {
     use axum::extract::Path;
     use axum::http::{StatusCode, header};

@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.id AS \"id!\", r.name, r.created_at, o.id AS \"owner_id!\", o.name AS owner_name, o.kind AS owner_kind\n               FROM repositories r JOIN owners o ON o.id = r.owner_id\n               WHERE o.name_key = ? AND r.name_key = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "repositories",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "repositories",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "repositories",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "owner_id!",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "owners",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "owner_name",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "owners",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "owner_kind",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "owners",
+            "name": "kind"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "65c19b375e8ca5fb8bd8b3bbd528381a01ebe515c7eab05df288130672069c36"
+}

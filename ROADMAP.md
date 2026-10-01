@@ -109,7 +109,7 @@ flowchart LR
 | `figment` | 0.10.19 | TOML config with environment overrides (features `toml`, `env`) | P0 |
 | `serde`, `serde_json`, `thiserror`, `anyhow` | (have) | — | — |
 | `gix` | 0.88.0 (have 0.87) | Reading repositories | — |
-| `sqlx` | 0.9.0 | Database: `sqlite`, `runtime-tokio`, `macros`, `migrate` (PostgreSQL later) | P1 |
+| `sqlx` | 0.9.0 | Database: `sqlite-bundled` (not `sqlite`, which also enables loading extensions), `runtime-tokio`, `macros`, `migrate` (PostgreSQL later) | P1 |
 | `jiff` | 0.2.37 | Timestamps with UTC offsets, RFC 3339 output (FR-API-011) | P1 |
 | `sha2` | 0.11.0 | Storage path hashes, token hashes | P1 |
 | `tempfile` | 3.27.0 | Atomic repository creation: initialise in a temp dir, then rename (FR-STOR-005) | P1 |
@@ -120,8 +120,8 @@ flowchart LR
 | `crc32fast` | 1.5.2 | PAT checksum | P2 |
 | `secrecy` | 0.10.3 | Keeps secrets out of `Debug` output and logs (NFR-OPS-023) | P2 |
 | `utoipa`, `utoipa-axum` | 6.0.0, 0.3.0 | OpenAPI generated from handlers (FR-API-005), for external clients | P3 |
-| `rust-embed` | 8.12.0 | Embedding the Topcoat asset bundle in the binary (feature `embed-assets`) | P3 |
-| `mime_guess` | 2.0.5 | Content types for embedded assets | P3 |
+| `rust-embed` | 8.12.0 | Embedding the Topcoat asset bundle in the binary, when `KLOTHO_ASSETS_DIR` is set at build time | P0 |
+| `mime_guess` | 2.0.5 | Content types for embedded assets | P0 |
 | `comrak` | 0.55.0 | Markdown (GFM) → HTML | P3 |
 | `ammonia` | 4.2.0 | HTML sanitising after comrak (NFR-SEC-011) | P3 |
 | `syntect` | 5.3.0 | Server-side syntax highlighting (FR-UI-003) | P3 |
@@ -162,7 +162,7 @@ Styling is Tailwind (through Topcoat, no Node) with Topcoat UI components copied
 
 | Tool | Install | Why |
 |---|---|---|
-| `sqlx-cli` | `cargo install sqlx-cli --no-default-features --features sqlite` | `sqlx migrate add`, and `cargo sqlx prepare` for offline query checking in CI |
+| `sqlx-cli` | `cargo install sqlx-cli --version 0.9.0 --no-default-features --features sqlite --locked` | `sqlx migrate add -r` for new migrations, and `cargo xtask sqlx-prepare` (which runs `cargo sqlx prepare`) after any query or migration change. Only needed when changing queries; building uses the committed `.sqlx/` |
 | `cargo-deny` | `cargo install cargo-deny` | Licence and security checks in CI |
 | `bacon` | `cargo install bacon` | Re-runs check, test or clippy on every save |
 | `topcoat-cli` | `cargo install topcoat-cli --version 0.9.0 --locked` | `cargo xtask dev` and `cargo xtask dist` run it. Also `topcoat ui add` and `topcoat fmt` for `view!` blocks. Keep its version equal to the `topcoat` crate's |
@@ -204,7 +204,7 @@ Phases run in order: 0, 1, 1b, 2 and onwards. Phase 1b (the native git transport
 
 > **Guide notes (what we learned).**
 > - **The asset manifest check from ADR 0002 couldn't be built as planned.** `topcoat asset bundle` always rebuilds before scanning and has no `--features` flag, so it can't scan the final, embedded binary. `cargo xtask dist` starts the final binary instead and fetches the page and its stylesheet. A wrong asset ID would make the page fail to render, so this catches the same breakage.
-> - **`embed-assets` must stay on `klotho-server`, never on `klotho-web`.** `tailwind::stylesheet!()` is `asset!(concat!(env!("OUT_DIR"), …))`, and asset IDs hash the path. A feature on `klotho-web` changes its `OUT_DIR`, and with it every asset ID, between the two build passes.
+> - **The second build pass must not change `klotho-web`'s build in any way.** `tailwind::stylesheet!()` is `asset!(concat!(env!("OUT_DIR"), …))`, and asset IDs hash the path, so anything that changes `klotho-web`'s `OUT_DIR` changes every asset ID. That includes any Cargo feature anywhere in the build, because features unify across dependencies (learned the hard way in Phase 1). Embedding is switched on by `KLOTHO_ASSETS_DIR` through `klotho-server`'s `build.rs`, which sets a crate-local `cfg(embed_assets)`.
 > - **`topcoat dev` passes `HOST`/`PORT` and waits for a readiness message.** Klotho uses them only when `TOPCOAT_DEV_URL` is set, and `klotho_server::serve` calls `klotho_web::notify_dev_server` after binding. `cargo topcoat dev` (the cargo subcommand form) is broken in 0.9.0, so use `topcoat dev` or `cargo xtask dev`.
 > - **The workspace's `topcoat` entry sets `default-features = false`.** Workspace dependencies can't turn default features off per crate, and `build.rs` needs Topcoat without them.
 > - **Formatting:** `rustfmt.toml` pins `max_width = 110` with `use_small_heuristics = "Max"`, the closest match to the code as it was written.
@@ -213,28 +213,31 @@ Phases run in order: 0, 1, 1b, 2 and onwards. Phase 1b (the native git transport
 
 **Goal:** repositories get real identities. This fixes most naming and storage conflicts.
 
-- SQLite via `sqlx`, migrations embedded with `sqlx::migrate!()`, and `/-/ready`.
-- Tables: `users` (minimal, since owners need to exist), `repositories` (`id`, `owner_id`, `name`, `name_key`, `created_at`), and `repo_redirects` (created now, used in Phase 6).
-- `names.rs` in `klotho-core`: `RepoName` keeps the display form and derives the key. Two parsers: `parse_new()` rejects the `.git`, `.wiki`, `.atom` and `.rss` suffixes; `parse_lookup()` strips one `.git`.
-- ID-based storage in `klotho-git`: `<data_dir>/repositories/<h[0:2]>/<h[2:4]>/<h>.git` with `h = hex(sha256(id))`.
-- Atomic create: DB insert (the unique index on `(owner_id, name_key)` rejects duplicates) → `gix::init_bare` in a `tempfile::TempDir` inside the storage root → `rename` into place → commit the transaction.
-- Owner-scoped routes: `/{owner}/{repo}` for git, and `/api/v1/repos/{owner}/{repo}` for the existing read endpoints.
-- `klotho admin adopt` and `GET /api/v1/admin/unadopted` for existing `gitRepos/*.git` directories.
+**Status:** done (2026-10-01).
 
-**Requirements:** FR-NAME-001–008, 010–012, 020–022, 030, 031, 040, 041; FR-STOR-001, 003–008, 010, 020; FR-REPO-001 (without auth), 002, 035.
+- ~~SQLite via `sqlx`, migrations embedded with `sqlx::migrate!()`, and `/-/ready`.~~ WAL mode, `foreign_keys=ON`, a 5 s busy timeout. `.sqlx/` holds the offline query cache; regenerate it with `cargo xtask sqlx-prepare`.
+- ~~Tables: `owners` (users and organisations share it), `users`, `repositories` and `repo_redirects` (used in Phase 6).~~ `AUTOINCREMENT`, so IDs are never reused.
+- ~~`names.rs` in `klotho-core`: `RepoName` and `OwnerName` keep the display form and derive the key, with `parse_new()` and `parse_lookup()`.~~ Owner names also reject the FR-NAME-032 and 033 reserved names.
+- ~~ID-based storage in `klotho-git`: `<data_dir>/repositories/<h[0:2]>/<h[2:4]>/<h>.git` with `h = hex(sha256(id))`.~~ `klotho-git` no longer knows names.
+- ~~Atomic create.~~ The repository is initialised in `<root>/.tmp/` and renamed into place.
+- ~~Owner-scoped routes: `/{owner}/{repo}` for git, and `/api/v1/repos/{owner}/{repo}` for the existing read endpoints.~~ Errors are `{"code", "message"}` (FR-API-030), and the repository resource has the FR-API-010 fields, with URLs built from the new `server.public_url` setting (NFR-SEC-001).
+- ~~`klotho admin adopt` / `unadopted` and `GET`, `POST`, `DELETE /api/v1/admin/unadopted/…`.~~ Also `klotho admin create-user`, `POST /api/v1/admin/users`, `POST /api/v1/admin/users/{username}/repos` (Gitea's shape) and `GET /api/v1/users/{username}/repos` (paged). See [api-endpoints.md](docs/design/api-endpoints.md).
+
+**Requirements:** FR-NAME-001–008, 010–012, 020–022, 030–034, 040, 041; FR-STOR-001, 003–008, 010, 020, 021 (create and adopt); FR-REPO-001 (without auth), 002, 035; FR-API-001, 003, 010, 030; NFR-PERF-011.
 
 **Done when:**
-- [ ] Creating `MyRepo` returns `"name": "MyRepo"`, and cloning `myrepo.git` works.
-- [ ] 50 parallel `POST`s of the same name: exactly 1 succeeds, 49 get `409`, and no stray directories are left.
-- [ ] `con`, `nul`, etc. clone fine on Windows, because the path is a hash.
-- [ ] `demo.git` as a new name gets `400`.
-- [ ] An existing repository from the old `gitRepos/` can be adopted and cloned.
+- [x] Creating `MyRepo` returns `"name": "MyRepo"`, and cloning `myrepo.git` works (`crates/server/tests/git.rs`, with the real git client).
+- [x] 50 parallel creates of the same name: exactly 1 succeeds, 49 get `repo_exists` (`409` over HTTP), and no stray directories are left. Tested on the service the HTTP handler calls (`repos::tests`).
+- [x] `con`, `nul`, etc. push and clone fine on Windows, because the path is a hash.
+- [x] `demo.git` as a new name gets `400` with code `name_invalid`.
+- [x] A repository from the old flat layout (`<root>/legacy.git`) can be adopted and cloned.
 
-> **Guide notes.**
-> - **SQLite first, PostgreSQL later.** sqlx's compile-time-checked macros (`query!`) check against *one* database, so supporting both from day one means writing untyped queries. Build on SQLite with `query!`. Add PostgreSQL later (FR-STOR-002 is should-have) with its own migrations directory, once the schema has settled.
-> - Turn on SQLite's WAL mode and `foreign_keys=ON` at connect time.
-> - Run `cargo sqlx prepare` so CI can build without a database.
-> - **Make `owner_id` point at an `owners` table** (`id`, `kind` = `user` | `org`, `name`, `name_key` with a unique index), with `users` referencing it. Organisations (Phase 7) then slot in without rewriting every foreign key, and FR-NAME-011 (one namespace for users and orgs) is enforced by the index from day one.
+> **Guide notes (what we learned).**
+> - **A crash between creating the directory and committing the row leaves a directory for an ID that the next create gets again**, because the rolled-back insert also rolls back SQLite's `AUTOINCREMENT` counter. `create_repo` moves such a directory to `<root>/.orphaned/` and carries on, instead of failing forever on that ID.
+> - **The `.sqlx/` cache is the only thing that lets CI build.** A query change without `cargo xtask sqlx-prepare` fails the build with "no cached data for this query", so stale caches can't slip through.
+> - **`embed-assets` is no longer a Cargo feature.** Phase 1's new dependencies made the feature change `windows-sys`'s features, so `klotho-web` rebuilt in the second pass and every asset ID changed. The dist check caught it. Now `klotho-server`'s `build.rs` sets `cfg(embed_assets)` when `KLOTHO_ASSETS_DIR` is set, and both passes resolve identical dependencies.
+> - **Still the old shapes:** `commits`, `tree` and `raw` moved under `/api/v1/repos/{owner}/{repo}` unchanged. Phase 3 replaces them.
+> - **The startup storage check walks every repository directory** (FR-STOR-020). It's fast, but it grows with the count; see the NFR-PERF-021 note in [performance.md](docs/requirements/performance.md).
 
 ### Phase 1b: Native git transport
 

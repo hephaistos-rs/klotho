@@ -46,11 +46,11 @@
 
 ## Conflicts with the current implementation
 
-Checked against commit `6b4895f`.
+Checked after Phase 1 (2026-10-01).
 
 | Requirement | Current behaviour | Where |
 |---|---|---|
-| NFR-PERF-013 (streamed raw downloads) | **Conflict.** `read_blob` loads the whole blob into a `Vec<u8>`, which the handler then returns, so memory grows with file size. | [browse.rs:131-140](../../crates/git/src/browse.rs#L131-L140), [api.rs:102-111](../../crates/server/src/api.rs#L102-L111) |
-| NFR-PERF-011 (listing independent of repo count) | **Conflict.** Every `GET /api/repos` reads and sorts the entire storage directory. | [store.rs:56-75](../../crates/git/src/store.rs#L56-L75) |
+| NFR-PERF-021 (startup time independent of repository count) | **Not ensured.** The startup storage check (FR-STOR-020) walks every directory under the storage root. It never opens a repository, so it's fast, but it grows with the count. If it shows up in startup times, move it to a background task after the server starts listening. | [main.rs](../../crates/klotho/src/main.rs) (`serve`), [store.rs](../../crates/git/src/store.rs) (`scan`) |
+| NFR-PERF-013 (streamed raw downloads) | **Conflict.** `read_blob` loads the whole blob into a `Vec<u8>`, which the handler then returns, so memory grows with file size. | [browse.rs](../../crates/git/src/browse.rs) (`read_blob`), [api.rs](../../crates/server/src/api.rs) (`raw`) |
 
-Met today: NFR-PERF-004 (request and response bodies are streamed through git's stdin and stdout), NFR-PERF-014 (the commit walk stops after `limit` commits), and NFR-PERF-022 (gix work runs in `spawn_blocking`).
+Met today: NFR-PERF-004 (request and response bodies are streamed through git's stdin and stdout), NFR-PERF-011 (repository listings come from the database, a page at a time, never from a directory scan), NFR-PERF-014 (the commit walk stops after `limit` commits) and NFR-PERF-022 (gix and filesystem work runs on the blocking pool).

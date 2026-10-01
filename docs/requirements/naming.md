@@ -78,17 +78,8 @@ Background for every rationale below: [forge-comparison.md](../research/forge-co
 
 ## Conflicts with the current implementation
 
-Checked against commit `6b4895f`.
+Checked after Phase 1 (2026-10-01): no conflicts. The rules live in [names.rs](../../crates/core/src/names.rs).
 
-| Requirement | Current behaviour | Where |
-|---|---|---|
-| FR-NAME-020 (preserve display casing) | **Conflict.** `RepoName::from_str` lowercases its input and keeps only the lowercased form. A repo created as `MyRepo` is returned by `POST /api/repos` and `GET /api/repos` as `myrepo`, and the original casing is lost. | [name.rs:29](../../crates/git/src/name.rs#L29) |
-| FR-NAME-030 (reject `.git` on new names) | **Conflict.** One parser handles both lookup and creation, so `POST /api/repos {"name":"demo.git"}` silently creates `demo`. | [name.rs:30](../../crates/git/src/name.rs#L30), [api.rs:67](../../crates/server/src/api.rs#L67) |
-| FR-NAME-031 (reserved suffixes) | **Conflict.** `demo.wiki`, `demo.atom` and `demo.rss` are all accepted. | [name.rs:31-36](../../crates/git/src/name.rs#L31-L36) |
-| FR-NAME-005 (no `..` inside names) | **Conflict (minor).** `a..b` is accepted. It is not exploitable today because `/` and `\` are rejected, but it breaks the rule. | [name.rs:31-36](../../crates/git/src/name.rs#L31-L36) |
-| FR-NAME-006 (leading `.` allowed) | **Conflict.** Every name starting with `.` is rejected, so `.github` and `.profile` can't be imported. | [name.rs:33](../../crates/git/src/name.rs#L33) |
-| FR-NAME-010, FR-NAME-011 (owner namespace) | **Conflict.** Repositories live in one flat namespace (`/<repo>`), and there are no owners. | [store.rs:27-29](../../crates/git/src/store.rs#L27-L29), [git_http.rs:31-38](../../crates/server/src/git_http.rs#L31-L38) |
-| FR-NAME-022 (uniqueness enforced by the store) | **Partial.** Uniqueness only holds because the key doubles as the directory name and `create` checks `path.exists()` before writing. The atomicity issue is tracked as FR-STOR-005. | [store.rs:37](../../crates/git/src/store.rs#L37) |
-| FR-NAME-041 (strip `.git` only on lookup) | **Partial.** Stripping happens in the shared parser, so it also happens on creation (see FR-NAME-030). | [name.rs:30](../../crates/git/src/name.rs#L30) |
+Met today: FR-NAME-001 to 008 (syntax, lengths, leading `-` and `.`, `..`, errors naming the offending character, one validator for every entry point), FR-NAME-010 to 012 (owner-scoped names in one owner namespace, unique per owner), FR-NAME-020 to 022 (display form kept, case-insensitive lookup, uniqueness enforced by a unique index), FR-NAME-030 to 033 (reserved suffixes and owner names), FR-NAME-034 (server routes live under `/-/`, apart from `/api` and git transport), FR-NAME-040 and 041 (`.git` optional in URLs, stripped once, only on lookup).
 
-**Suggested direction.** Split `RepoName` into a validated display name, which keeps its case, and a derived key used for `Eq`/`Hash`/lookup. Use a separate parser for URL segments (strip `.git`, then validate) and for new names (validate and reject the reserved suffixes). The key rules already in place (FR-NAME-001, 002, 004, 021, 040) are consistent with the requirements and should be kept.
+Not built yet, by plan: FR-NAME-023, 024 and 050 to 056 (canonical-case redirects, renames and redirects; Phase 6).

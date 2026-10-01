@@ -10,12 +10,14 @@ use std::future::Future;
 use std::io;
 use std::time::Duration;
 
+use axum::extract::State;
 use axum::extract::{FromRef, Request};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
+use klotho_core::Core;
 use klotho_core::config::ServerConfig;
-use klotho_git::RepoStore;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -29,20 +31,20 @@ use tracing::Level;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub store: RepoStore,
+    pub core: Core,
     /// Background tasks that drive git processes. Shutdown waits for them.
     pub git_tasks: TaskTracker,
 }
 
 impl AppState {
-    pub fn new(store: RepoStore) -> Self {
-        Self { store, git_tasks: TaskTracker::new() }
+    pub fn new(core: Core) -> Self {
+        Self { core, git_tasks: TaskTracker::new() }
     }
 }
 
-impl FromRef<AppState> for RepoStore {
+impl FromRef<AppState> for Core {
     fn from_ref(state: &AppState) -> Self {
-        state.store.clone()
+        state.core.clone()
     }
 }
 
@@ -60,7 +62,7 @@ pub fn build_app(state: AppState, config: &ServerConfig) -> Router {
     let timeout = TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, config.request_timeout());
 
     let api = api::router().layer(RequestBodyLimitLayer::new(config.api_body_limit)).layer(timeout);
-    let ops = Router::new().route("/-/health", get(health)).layer(timeout);
+    let ops = Router::new().route("/-/health", get(health)).route("/-/ready", get(ready)).layer(timeout);
     let web = assets::router().layer(timeout);
 
     Router::new().nest("/api", api).merge(ops).merge(git_http::router()).merge(web).with_state(state).layer(
@@ -87,6 +89,17 @@ pub fn build_app(state: AppState, config: &ServerConfig) -> Router {
 /// Liveness (NFR-OPS-022): the process is up and serving requests.
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
+}
+
+/// Readiness (NFR-OPS-022): the database and repository storage are reachable.
+async fn ready(State(core): State<Core>) -> impl IntoResponse {
+    match core.ready().await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "status": "ok" }))),
+        Err(err) => {
+            tracing::warn!(%err, "not ready");
+            (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "status": "unavailable" })))
+        }
+    }
 }
 
 /// Serves `app` until `shutdown` completes, then stops accepting connections and

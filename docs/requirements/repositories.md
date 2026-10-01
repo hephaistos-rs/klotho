@@ -53,12 +53,11 @@
 
 ## Conflicts with the current implementation
 
-Checked against commit `6b4895f`.
+Checked after Phase 1 (2026-10-01).
 
 | Requirement | Current behaviour | Where |
 |---|---|---|
-| FR-REPO-003 (configurable default branch) | **Conflict.** The default branch is the compile-time constant `main`. It matches FR-REPO-002 but can't be changed. | [store.rs:13](../../crates/git/src/store.rs#L13) |
-| FR-REPO-001 (only authorised users create) | **Conflict.** `POST /api/repos` has no authentication, so anyone who can reach the server can create repositories. | [api.rs:62-69](../../crates/server/src/api.rs#L62-L69) |
-| FR-REPO-035 (adoption) | **Conflict.** Correctly named directories created by hand are listed straight away without ever being registered, and others are hidden. Neither case goes through an adoption step. | [store.rs:52-75](../../crates/git/src/store.rs#L52-L75) |
+| FR-REPO-001 (only authorised users create) | **Conflict.** Repositories are created through `POST /api/v1/admin/users/{username}/repos`, which has no authentication until Phase 2, so anyone who can reach the server can create them. | [api.rs](../../crates/server/src/api.rs) (`create_repo`) |
+| FR-REPO-003 (configurable default branch) | **Conflict.** The default branch is the compile-time constant `main`. It matches FR-REPO-002 but can't be changed (Phase 6). | [store.rs](../../crates/git/src/store.rs) (`DEFAULT_BRANCH`) |
 
-FR-REPO-002 is met today.
+Met today: FR-REPO-002 (HEAD points at `main`) and FR-REPO-035 (unadopted repositories can be adopted under an owner, moving them to their ID-based path, or deleted; through `klotho admin` and the API).

@@ -57,7 +57,7 @@ Topcoat writes its asset bundle to a directory *after* building the program: `to
 An asset's ID is a hash of (crate name, source file, asset path, options) and does not depend on the binary. So we use a **two-pass release build**:
 
 1. `cargo build --release`, then `topcoat asset bundle --release --out target/klotho-assets`.
-2. `cargo build --release --features embed-assets`. This embeds `target/klotho-assets` with `rust-embed` and `include_str!`s its `manifest.toml`.
+2. `cargo build --release` with `KLOTHO_ASSETS_DIR=target/klotho-assets` (originally planned as `--features embed-assets`; see the update below). This embeds `target/klotho-assets` with `rust-embed` and `include_str!`s its `manifest.toml`.
 3. At runtime, `AssetConfig::hosted_at("/-/assets", Manifest::parse(EMBEDDED_MANIFEST))` makes Topcoat render URLs under `/-/assets/…`, and an axum route serves the embedded files with `immutable` caching.
 4. **Check:** copy the final binary alone into an empty folder, start it, and require the home page and the stylesheet it links to to be served. If a future Topcoat release makes IDs depend on the binary, the page fails to render and the build fails, instead of the release panicking at runtime.
 
@@ -65,7 +65,7 @@ A `cargo xtask dist` command wraps all four steps, and CI runs it. In developmen
 
 > **Updated 2026-10-01, after the Phase 0 spike.**
 > - Step 4 was planned as "bundle again from the final binary and compare manifests". That can't be done: `topcoat asset bundle` always rebuilds before scanning and has no `--features` flag. Running the final binary checks the same thing more directly.
-> - **The `embed-assets` feature lives on `klotho-server`, not `klotho-web`.** Asset IDs hash the asset's path, and the Tailwind stylesheet's path is in `klotho-web`'s `OUT_DIR`. A feature on `klotho-web` would change its `OUT_DIR`, and so the IDs, between the two passes.
+> - **Step 2 isn't a Cargo feature.** Asset IDs hash the asset's path, and the Tailwind stylesheet's path is in `klotho-web`'s `OUT_DIR`. Any Cargo feature can change `klotho-web`'s `OUT_DIR` through feature unification. It happened in Phase 1, when the embedding dependencies turned on extra `windows-sys` features. So step 2 is `cargo build --release` with `KLOTHO_ASSETS_DIR` set, and `klotho-server`'s `build.rs` turns that into a crate-local `cfg(embed_assets)`. The embedding dependencies are always compiled, so both passes resolve the same dependencies.
 
 We'll also ask upstream for first-class embedded bundles. If that lands, the two-pass build goes away.
 

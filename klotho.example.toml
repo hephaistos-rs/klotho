@@ -12,6 +12,10 @@
 [server]
 # Address and port to listen on.
 addr = "0.0.0.0:3000"
+# The URL people use to reach Klotho, e.g. "https://git.example.com". Clone URLs
+# and links are built from it, never from the request's Host header. Set it
+# whenever Klotho runs behind a proxy or on another port.
+public_url = "http://localhost:3000"
 # On Ctrl-C or SIGTERM, how many seconds to wait for running requests and git
 # operations (such as a push) before exiting.
 shutdown_grace_secs = 30

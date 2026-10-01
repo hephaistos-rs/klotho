@@ -1,57 +1,61 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use klotho_core::Error;
 use serde_json::json;
 
-/// Error type for handlers: known `klotho_git::Error`s map to 4xx, everything else is a
-/// logged 500 whose details are not sent to the client.
+/// A handler error, sent as `{"code": …, "message": …}` (FR-API-030). `code` is
+/// stable for clients to branch on; `message` is for people and may change.
+/// Internal failures are logged and answered with a generic 500 that reveals
+/// nothing (NFR-SEC-030).
 #[derive(Debug)]
-pub enum AppError {
-    Git(klotho_git::Error),
-    Internal(anyhow::Error),
+pub struct ApiError {
+    status: StatusCode,
+    code: &'static str,
+    message: String,
 }
 
-impl IntoResponse for AppError {
+impl ApiError {
+    pub fn new(status: StatusCode, code: &'static str, message: impl Into<String>) -> Self {
+        Self { status, code, message: message.into() }
+    }
+
+    pub fn not_found() -> Self {
+        Self::new(StatusCode::NOT_FOUND, "not_found", "not found")
+    }
+
+    fn internal(err: &dyn std::fmt::Debug) -> Self {
+        tracing::error!(error = ?err, "request failed");
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "internal server error")
+    }
+}
+
+impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = match &self {
-            Self::Git(err) => match err {
-                klotho_git::Error::InvalidName(_) => StatusCode::BAD_REQUEST,
-                klotho_git::Error::RepoNotFound(_)
-                | klotho_git::Error::RevisionNotFound(_)
-                | klotho_git::Error::PathNotFound(_) => StatusCode::NOT_FOUND,
-                klotho_git::Error::RepoExists(_) => StatusCode::CONFLICT,
-                klotho_git::Error::Io(_) | klotho_git::Error::Git(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            },
-            Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-
-        let message = if status == StatusCode::INTERNAL_SERVER_ERROR {
-            tracing::error!(error = ?self, "request failed");
-            "internal server error".to_owned()
-        } else {
-            match self {
-                Self::Git(err) => err.to_string(),
-                Self::Internal(err) => err.to_string(),
-            }
-        };
-        (status, Json(json!({ "error": message }))).into_response()
+        (self.status, Json(json!({ "code": self.code, "message": self.message }))).into_response()
     }
 }
 
-impl From<klotho_git::Error> for AppError {
-    fn from(err: klotho_git::Error) -> Self {
-        Self::Git(err)
+impl From<Error> for ApiError {
+    fn from(err: Error) -> Self {
+        use StatusCode as S;
+        let (status, code) = match &err {
+            Error::InvalidName(_) => (S::BAD_REQUEST, "name_invalid"),
+            Error::OwnerNotFound(_) => (S::NOT_FOUND, "owner_not_found"),
+            Error::RepoNotFound(_) => (S::NOT_FOUND, "repo_not_found"),
+            Error::NotUnadopted(_) => (S::NOT_FOUND, "unadopted_not_found"),
+            Error::OwnerExists(_) => (S::CONFLICT, "owner_exists"),
+            Error::RepoExists(_) => (S::CONFLICT, "repo_exists"),
+            Error::Git(klotho_git::Error::RevisionNotFound(_)) => (S::NOT_FOUND, "revision_not_found"),
+            Error::Git(klotho_git::Error::PathNotFound(_)) => (S::NOT_FOUND, "path_not_found"),
+            _ => return Self::internal(&err),
+        };
+        Self::new(status, code, err.to_string())
     }
 }
 
-impl From<std::io::Error> for AppError {
+impl From<std::io::Error> for ApiError {
     fn from(err: std::io::Error) -> Self {
-        Self::Internal(err.into())
-    }
-}
-
-impl From<tokio::task::JoinError> for AppError {
-    fn from(err: tokio::task::JoinError) -> Self {
-        Self::Internal(err.into())
+        Self::internal(&err)
     }
 }

@@ -5,7 +5,10 @@
 //! - `dist`: the release build, a single `klotho` binary with the web UI's assets
 //!   embedded (ADR 0002), written to `dist/`.
 //!
-//! Both need the Topcoat CLI: `cargo install topcoat-cli --version 0.9.0 --locked`.
+//! - `sqlx-prepare`: regenerates `.sqlx/` after a query or migration changes.
+//!
+//! `dev` and `dist` need the Topcoat CLI: `cargo install topcoat-cli --version 0.9.0 --locked`.
+//! `sqlx-prepare` needs sqlx-cli: `cargo install sqlx-cli --version 0.9.0 --no-default-features --features sqlite --locked`.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -20,8 +23,31 @@ fn main() -> Result {
     match env::args().nth(1).as_deref() {
         Some("dev") => dev(),
         Some("dist") => dist(),
-        _ => Err("usage: cargo xtask <dev|dist>".into()),
+        Some("sqlx-prepare") => sqlx_prepare(),
+        _ => Err("usage: cargo xtask <dev|dist|sqlx-prepare>".into()),
     }
+}
+
+/// Regenerates `.sqlx/`, the cached query metadata that lets `sqlx::query!`
+/// type-check queries without a database (in CI, and for anyone who just builds).
+/// Run it after changing a query or a migration, and commit the result.
+fn sqlx_prepare() -> Result {
+    let root = workspace_root();
+    let target = env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
+    let db = target.join("sqlx-prepare.db");
+    for file in [db.clone(), db.with_extension("db-wal"), db.with_extension("db-shm")] {
+        let _ = fs::remove_file(file);
+    }
+    let url = format!("sqlite:{}", db.display().to_string().replace('\\', "/"));
+    let sqlx = |args: &[&str]| -> Result {
+        run(Command::new("sqlx").args(args).env("DATABASE_URL", &url).current_dir(&root))
+    };
+    sqlx(&["database", "create"])?;
+    sqlx(&["migrate", "run", "--source", "crates/core/migrations"])?;
+    run(Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+        .args(["sqlx", "prepare", "--workspace", "--", "--all-targets"])
+        .env("DATABASE_URL", &url)
+        .current_dir(&root))
 }
 
 fn dev() -> Result {
@@ -36,8 +62,10 @@ fn dev() -> Result {
 ///
 /// 1. `topcoat asset bundle --release` builds Klotho and collects the assets its
 ///    binary declares into `target/klotho-assets`.
-/// 2. `cargo build --release --features embed-assets` builds it again with that
-///    bundle embedded.
+/// 2. `cargo build --release` with `KLOTHO_ASSETS_DIR` pointing at the bundle
+///    builds it again with the bundle embedded. Only `klotho-server` (whose
+///    build script reads the variable) and the binary are rebuilt; a Cargo
+///    feature would change dependency resolution and with it the asset IDs.
 /// 3. The binary is copied alone into an empty folder, started, and must serve the
 ///    home page and its stylesheet. If the second pass changed any asset's ID, the
 ///    page fails to render, so this catches a broken bundle before release.
@@ -52,9 +80,10 @@ fn dist() -> Result {
     run(Command::new("topcoat")
         .args(["asset", "bundle", "--release", "--package", "klotho", "--out"])
         .arg(&bundle)
+        .env_remove("KLOTHO_ASSETS_DIR")
         .current_dir(&root))?;
     run(Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-        .args(["build", "--release", "--package", "klotho", "--features", "embed-assets"])
+        .args(["build", "--release", "--package", "klotho"])
         .env("KLOTHO_ASSETS_DIR", &bundle)
         .current_dir(&root))?;
 

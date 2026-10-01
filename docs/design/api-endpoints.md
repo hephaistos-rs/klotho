@@ -64,14 +64,15 @@ There are no sign-in endpoints in `/api/v1`. The API takes only bearer tokens, a
 | GET · DELETE | `/user/tokens` · `/user/tokens/{id}` | user | List and revoke personal access tokens. Creating a token is browser-only, so a stolen token can't mint more | FR-AUTH-011 | P2 |
 | GET, POST | `/user/keys` · DELETE `/user/keys/{id}` | user / sudo | SSH public keys | FR-AUTH-014 | P4 |
 | GET | `/user/repos` | user | Repositories the user can access | FR-REPO-040 | P3 |
-| POST | `/user/repos` | user | Create a repository owned by the user | FR-REPO-001 | P1 |
+| POST | `/user/repos` | user | Create a repository owned by the user. Needs a signed-in user, so it arrives with accounts; until then `POST /admin/users/{username}/repos` creates repositories | FR-REPO-001 | P2 |
 | GET, POST | `/user/applications/oauth2` · PATCH, DELETE `/…/{id}` | user / sudo | OAuth2 apps the user registered | FR-AUTH-035 | P8 |
 
 ### Users and organisations
 
 | Method | Path | Access | Purpose | Req | Phase |
 |---|---|---|---|---|---|
-| GET | `/users/{username}` · `/users/{username}/repos` | anon | Public profile and public repositories | FR-UI-023 | P3 |
+| GET | `/users/{username}` | anon | Public profile | FR-UI-023 | P3 |
+| GET | `/users/{username}/repos?limit=&cursor=` | anon | The user's public repositories, paged with a `Link` header | FR-UI-023, FR-API-020 | P1 |
 | POST | `/orgs` | user | Create an organisation | FR-ACL-005 | P7 |
 | GET, PATCH, DELETE | `/orgs/{org}` | anon / org-owner / org-owner + sudo | View, edit, delete | FR-ACL-005 | P7 |
 | GET, POST | `/orgs/{org}/repos` | anon / member with create rights | List or create the org's repositories | FR-REPO-001 | P7 |
@@ -149,7 +150,9 @@ Issues and pull requests share one number sequence (FR-COLLAB-021).
 
 | Method | Path | Purpose | Req | Phase |
 |---|---|---|---|---|
-| GET, POST | `/admin/users` | List and create users | FR-AUTH-001 | P2 |
+| POST | `/admin/users` | Create a user (`{"username"}`). Phase 2 adds listing, passwords and emails | FR-AUTH-001 | P1 |
+| GET | `/admin/users` | List users | FR-AUTH-001 | P2 |
+| POST | `/admin/users/{username}/repos` | Create a repository for a user (as in Gitea) | FR-REPO-001 | P1 |
 | PATCH, DELETE | `/admin/users/{username}` | Suspend, promote, delete (sudo) | FR-ACL-004 | P2 |
 | GET | `/admin/unadopted` | Directories under storage that aren't known repositories | FR-STOR-020 | P1 |
 | POST, DELETE | `/admin/unadopted/{dir}` | Adopt or delete one | FR-REPO-035 | P1 |
@@ -239,10 +242,12 @@ Rendered on the server by `klotho-web` (FR-UI-050), each with its own title and 
 
 | Today | Becomes | Changes |
 |---|---|---|
-| `GET /api/repos` | `GET /api/v1/user/repos`, `GET /api/v1/repos/search` | Paginated; filtered to what the caller can see |
-| `POST /api/repos` `{name}` | `POST /api/v1/user/repos` `{name, private, description}` | Requires authentication; rejects `.git` names |
+| `GET /api/repos` | `GET /api/v1/users/{username}/repos` (P1); `GET /api/v1/user/repos`, `GET /api/v1/repos/search` (P2, P3) | Paginated; filtered to what the caller can see |
+| `POST /api/repos` `{name}` | `POST /api/v1/admin/users/{username}/repos` `{name}` (P1); `POST /api/v1/user/repos` `{name, private, description}` (P2) | Requires authentication from P2; rejects `.git` names |
 | `GET /api/repos/{repo}` | `GET /api/v1/repos/{o}/{r}` | Adds ID, owner, display name and URLs |
 | `GET /api/repos/{repo}/commits?rev=&limit=` | `GET /api/v1/repos/{o}/{r}/commits?ref=&cursor=` | `rev` → `ref`; cursor pagination; RFC 3339 times |
 | `GET /api/repos/{repo}/tree?rev=&path=` | `GET /api/v1/repos/{o}/{r}/contents/{*path}?ref=` | Path moves into the URL |
 | `GET /api/repos/{repo}/raw?rev=&path=` | `GET /api/v1/repos/{o}/{r}/raw/{*path}?ref=` | Streamed; adds `nosniff` |
 | `/{repo}/info/refs` etc. | `/{o}/{r}/info/refs` etc. | Owner added; authentication added |
+
+**Status after Phase 1.** The API is at `/api/v1` and owner-scoped, and git transport is at `/{o}/{r}`. The three browsing endpoints moved as they were, keeping their old query parameters for now: `/api/v1/repos/{o}/{r}/commits?rev=&limit=`, `/tree?rev=&path=` and `/raw?rev=&path=` (`raw` already sends `nosniff`). Phase 3 replaces them with the shapes above.

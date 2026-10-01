@@ -45,15 +45,11 @@
 
 ## Conflicts with the current implementation
 
-Checked against commit `6b4895f`.
+Checked after Phase 1 (2026-10-01).
 
 | Requirement | Current behaviour | Where |
 |---|---|---|
-| FR-API-001 (versioned prefix) | **Conflict.** The API is mounted at an unversioned `/api`. | [lib.rs:12](../../crates/server/src/lib.rs#L12) |
-| FR-API-003 (owner in path) | **Conflict.** Paths are `/api/repos/{repo}` with no owner (see FR-NAME-010). | [api.rs:25-31](../../crates/server/src/api.rs#L25-L31) |
-| FR-API-010 (repository resource fields) | **Conflict.** `RepoInfo` returns only `name`, `default_branch`, `empty` and `refs`. It has no ID, owner or URLs, and `name` is the lowercased key rather than the display name. | [browse.rs:8-15](../../crates/git/src/browse.rs#L8-L15) |
-| FR-API-011 (RFC 3339 timestamps with offset) | **Conflict.** `author_time` is Unix seconds, and the author's UTC offset and the committer are dropped. | [browse.rs:29-30](../../crates/git/src/browse.rs#L29-L30) |
-| FR-API-020, FR-API-021 (pagination) | **Conflict.** `GET /api/repos` returns every repository in one response. `GET …/commits` has a `limit` (max 500) but no way to get the next page, and `GET …/tree` is unbounded. | [api.rs:58-61](../../crates/server/src/api.rs#L58-L61), [api.rs:22](../../crates/server/src/api.rs#L22) |
-| FR-API-030 (error codes) | **Partial.** Errors are JSON `{"error": "<message>"}` with sensible status codes, but there's no stable `code` field. | [error.rs:37](../../crates/server/src/error.rs#L37) |
+| FR-API-011 (RFC 3339 timestamps with offset) | **Partial.** Repository `created_at` is RFC 3339, but commits still give `author_time` as Unix seconds and drop the author's UTC offset and the committer. Phase 3 replaces these endpoints. | [browse.rs](../../crates/git/src/browse.rs) (`CommitInfo`) |
+| FR-API-020, FR-API-021 (pagination) | **Partial.** `GET /users/{username}/repos` is paged with a `Link` header. `GET …/commits` has a `limit` (max 500) but no next page, and `GET …/tree` is unbounded. Phase 3 replaces these endpoints. | [api.rs](../../crates/server/src/api.rs) |
 
-Met today: FR-API-012 (full object IDs). Internal error details are already hidden from clients; that requirement lives in [security.md](security.md) as NFR-SEC-030.
+Met today: FR-API-001 (`/api/v1`, with JSON 404s for anything else under `/api`), FR-API-003 (`/api/v1/repos/{owner}/{repo}`), FR-API-010 (repository resource with ID, owner, display name, URLs built from `server.public_url`), FR-API-012 (full object IDs) and FR-API-030 (`{"code", "message"}` errors). Internal error details are hidden from clients; that requirement lives in [security.md](security.md) as NFR-SEC-030.

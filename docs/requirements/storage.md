@@ -67,15 +67,16 @@ Git LFS objects, release assets, attachments, avatars, cached archives and backu
 
 ## Conflicts with the current implementation
 
-Checked against commit `6b4895f`.
+Checked after Phase 1 (2026-10-01).
 
 | Requirement | Current behaviour | Where |
 |---|---|---|
-| FR-STOR-001, FR-STOR-003 (metadata store, immutable IDs) | **Conflict.** There is no metadata store and no repository ID. The directory name is the only record a repository exists. | [store.rs](../../crates/git/src/store.rs) |
-| FR-STOR-004, FR-STOR-006 (ID-based paths; renames don't move data) | **Conflict.** The path is `<root>/<name>.git`, so a future rename will have to move directories. | [store.rs:27-29](../../crates/git/src/store.rs#L27-L29) |
-| FR-STOR-005 (atomic create) | **Conflict.** `create` checks `path.exists()` and then calls `gix::init_bare` on the final path. Two simultaneous creates can both pass the check, so the loser may get an internal error rather than "already exists". Meanwhile `list()` can show a directory that is only partly initialised, and `open` then fails on it. | [store.rs:35-43](../../crates/git/src/store.rs#L35-L43) |
-| FR-STOR-007 (usable paths on every platform) | **Conflict (verified).** On Windows, `POST /api/repos {"name":"con"}` succeeds and `con` shows up in the listing, but `git clone http://…/con.git` fails with HTTP 500 because `git upload-pack` rejects the path. The same applies to `nul`, `aux`, `prn`, `com1`–`com9` and `lpt1`–`lpt9`. | [name.rs:31-36](../../crates/git/src/name.rs#L31-L36), [store.rs:27-29](../../crates/git/src/store.rs#L27-L29) |
-| FR-STOR-020 (report inconsistencies) | **Conflict.** `list()` silently skips directories whose names aren't already normalised, e.g. a hand-made `Demo.git`, and anything else it can't parse. Nothing is logged, so an admin gets no hint the data exists. | [store.rs:52-75](../../crates/git/src/store.rs#L52-L75) |
-| NFR-STOR-001 (durable pushes) | **Not ensured.** Repositories are created without `core.fsync` settings, so durability depends on git's defaults for the installed version. | [store.rs:35-43](../../crates/git/src/store.rs#L35-L43) |
+| NFR-STOR-001 (durable pushes) | **Not ensured.** Pushes still go through `git receive-pack` with git's default `core.fsync`. The native engine (Phase 1b, ADR 0004) fsyncs packs and refs itself. | [git_http.rs](../../crates/server/src/git_http.rs) |
 
-FR-STOR-008 is met today: every path is lowercased, so behaviour is the same on every filesystem. Keep that property through any redesign. FR-STOR-012 is met since Phase 0: one `data_dir`, resolved against the config file's folder, with the absolute paths logged at startup.
+Met today:
+- FR-STOR-001, 003 (a SQLite metadata store; repository IDs that are never reused, thanks to `AUTOINCREMENT`).
+- FR-STOR-004, 006, 007, 008 (paths derived from a hash of the ID, so names never reach the filesystem: renames won't move data, and `con` or `Demo`/`demo` mean nothing to the filesystem).
+- FR-STOR-005 (atomic create: the unique index decides races, the repository is initialised in `.tmp/` and renamed into place; 50 concurrent creates give one success and no leftovers, tested).
+- FR-STOR-010, 012 (configurable storage root inside one `data_dir`).
+- FR-STOR-020 (unadopted directories and missing repositories are reported at startup, by `klotho admin unadopted` and by `GET /api/v1/admin/unadopted`).
+- FR-STOR-021 for create and adopt: a crash before the commit leaves a directory for an ID with no row; the next create of that ID moves it to `.orphaned/` instead of failing, and `.tmp/` and `.trash/` are emptied at startup.

@@ -25,6 +25,9 @@ pub struct Config {
 pub struct ServerConfig {
     /// Address to listen on.
     pub addr: SocketAddr,
+    /// The URL people reach Klotho at. Every generated URL (clone URLs, links in
+    /// emails) is built from it, never from a request's `Host` header (NFR-SEC-001).
+    pub public_url: String,
     /// How long shutdown waits for running requests and git processes (NFR-OPS-030).
     pub shutdown_grace_secs: u64,
     /// Timeout for every request except git transport, which can run for as long as
@@ -48,6 +51,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             addr: SocketAddr::from(([0, 0, 0, 0], 3000)),
+            public_url: "http://localhost:3000".to_owned(),
             shutdown_grace_secs: 30,
             request_timeout_secs: 30,
             api_body_limit: 1024 * 1024,
