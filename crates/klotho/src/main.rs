@@ -1,12 +1,7 @@
-mod api;
-mod error;
-mod smart_http;
-
 use std::env;
 use std::net::SocketAddr;
 
-use axum::Router;
-use git::RepoStore;
+use klotho_git::RepoStore;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
@@ -24,10 +19,7 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!(%addr, repos = %store.root().display(), "Klotho listening");
 
-    let app = Router::new()
-        .nest("/api", api::router())
-        .merge(smart_http::router())
-        .with_state(store);
+    let app = klotho_server::build_app(store);
     axum::serve(TcpListener::bind(addr).await?, app).await?;
     Ok(())
 }

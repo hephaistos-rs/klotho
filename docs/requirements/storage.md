@@ -1,0 +1,67 @@
+# Storage requirements
+
+**Scope:** where and how Klotho keeps its data. That means the git data on disk, the metadata store, how repository identities map to paths, atomicity, durability, integrity, housekeeping, backup and quotas.
+
+**Not in scope:** name syntax ([naming.md](naming.md)), repository lifecycle operations ([repositories.md](repositories.md)), and how fast storage has to be ([performance.md](performance.md)).
+
+## Metadata and layout
+
+| ID | Requirement | Rationale | Priority |
+|---|---|---|---|
+| FR-STOR-001 | Klotho **must** keep a metadata store, separate from the git data, that holds at least: repositories (ID, owner, display name, key), owners, redirects and credentials. | GitLab, Gitea and Forgejo all use a database next to their bare repositories. Display names (FR-NAME-020) and redirects (FR-NAME-050) can't be derived from the filesystem. | must-have |
+| FR-STOR-002 | The metadata store **should** default to embedded SQLite and **should** also support PostgreSQL. | Gitea and Forgejo ship with SQLite for small installs and support PostgreSQL for larger ones. A single-binary self-hosted install needs zero setup. | should-have |
+| FR-STOR-003 | Each repository **must** have an immutable internal ID, assigned at creation and never reused. | All four identify repositories by ID internally. Redirects (FR-NAME-052) and ID-based paths (FR-STOR-004) need it. | must-have |
+| FR-STOR-004 | A repository's location on disk **should** be derived from its immutable ID, e.g. `<root>/<h[0:2]>/<h[2:4]>/<h>.git` where `h` is a hash of the ID, not from its name. | GitLab hashed storage makes the layout immutable, spreads repositories evenly, and never puts user input in a path. Case-insensitive filesystems and Windows device names stop mattering. | should-have |
+| FR-STOR-005 | Creating a repository **must** be atomic: when two requests race to create the same key, exactly one succeeds and the other gets "already exists". A half-initialised repository **must never** be visible to `open`, `list` or git clients. | Needed for correctness. GitLab #3229 shows the damage duplicate entries cause. A standard way to do this is to initialise in a temporary directory and rename it into place. | must-have |
+| FR-STOR-006 | Renaming or transferring a repository **should not** move or copy its git data. | GitLab: a rename "costs only the database transaction". Gitea has to move directories, which is slow and can leave the database and disk out of step. | should-have |
+| FR-STOR-007 | Any path built from a user-supplied value **must** be a valid, usable git repository path on every supported platform. On Windows this means it can't be a device name (`con`, `prn`, `aux`, `nul`, `com1`–`com9`, `lpt1`–`lpt9`, any case, with or without an extension). | Verified: Git for Windows refuses to use `con.git` although the OS creates it (see [forge-comparison.md § 5](../research/forge-comparison.md#5-how-names-map-to-paths-on-disk)). FR-STOR-004 satisfies this automatically. | must-have |
+| FR-STOR-008 | Storage **must** behave the same on case-sensitive and case-insensitive filesystems. Two names that differ only in case must never map to two different paths. | Gitea lowercases paths for exactly this reason. Klotho is developed on Windows and deployed on Linux. | must-have |
+| FR-STOR-009 | A repository's wiki (if implemented) **should** be stored as a sibling bare repository derived from the same ID, e.g. `<h>.wiki.git`. | GitLab, Gitea and GitHub all keep the wiki as a separate git repository next to the main one. | nice-to-have |
+| FR-STOR-010 | The storage root **must** be configurable. | Universal. | must-have |
+| FR-STOR-011 | Klotho **may** support several storage roots, choosing one per repository when it is created. | GitLab lets admins spread repositories over several storage locations to grow capacity. | nice-to-have |
+
+## Consistency
+
+| ID | Requirement | Rationale | Priority |
+|---|---|---|---|
+| FR-STOR-020 | Directories under the storage root that don't match a known repository, and known repositories whose directory is missing, **must** be reported to administrators (a log warning at startup plus an admin view or CLI command), not silently ignored. | Gitea surfaces unadopted repositories in its admin panel. Silently hiding data makes problems hard to find. | should-have |
+| FR-STOR-021 | Metadata and git data changes that belong together, such as creating, deleting or transferring a repository, **must** leave the system consistent if the process crashes at any point. Either both are applied, or recovery on the next start completes or rolls back the operation. | Gitea's name-based moves can leave the database and disk disagreeing after a crash. | must-have |
+
+## Durability and integrity
+
+| ID | Requirement | Rationale | Priority |
+|---|---|---|---|
+| NFR-STOR-001 | Once a push has been reported as successful, its objects and ref updates **must** survive power loss. For example, git must run with `core.fsync` covering committed objects and refs. | Git only guarantees this with the right `core.fsync` settings. Losing data after telling the client the push succeeded is the worst failure a forge can have. | must-have |
+| NFR-STOR-002 | A push interrupted at any point **must** leave refs either fully at their old values or fully at their new values. It must never leave a ref pointing to a missing object. | `git receive-pack` guarantees this when refs are updated through it. Klotho must not bypass it. | must-have |
+| FR-STOR-030 | Klotho **should** run a scheduled integrity check (`git fsck` or equivalent) over all repositories and report failures to administrators. | GitLab (repository checks) and Gitea (cron `git fsck`). | should-have |
+| FR-STOR-031 | Klotho **should** run repository housekeeping (repack, prune, commit-graph and bitmap generation) on a schedule and after a configurable number of pushes. | GitLab housekeeping and Gitea `git gc` cron. Stops fetches slowing down as repositories age. | should-have |
+
+## Backup and restore
+
+| ID | Requirement | Rationale | Priority |
+|---|---|---|---|
+| FR-STOR-040 | Administrators **must** be able to take a consistent backup of all git data and metadata while the server is running. | GitLab `backup create` and Gitea `dump`. Self-hosters are their own disaster recovery. | must-have |
+| FR-STOR-041 | Administrators **must** be able to restore a backup onto a fresh install of the same version, ending with an identical set of repositories, refs, owners and redirects. | A backup that can't be restored is worth nothing. GitLab and Gitea both document the restore path. | must-have |
+| NFR-STOR-010 | The backup and restore procedure **should** be covered by an automated test that backs up, restores and compares all refs. | Makes FR-STOR-041 verifiable. | should-have |
+
+## Quotas and deduplication
+
+| ID | Requirement | Rationale | Priority |
+|---|---|---|---|
+| FR-STOR-050 | Administrators **should** be able to set per-owner and per-repository disk quotas, and pushes that would exceed a quota **should** be rejected with a clear message. | Forgejo quotas and GitLab storage limits. Stops one tenant filling the disk. | should-have |
+| FR-STOR-051 | Forks **may** share objects with their upstream through git alternates or an object pool. | GitLab `@pools` and GitHub fork networks. Saves disk space for popular repositories. It also means commits pushed to one fork can be reached through the others, which has to be considered before building it. | nice-to-have |
+
+## Conflicts with the current implementation
+
+Checked against commit `6b4895f`.
+
+| Requirement | Current behaviour | Where |
+|---|---|---|
+| FR-STOR-001, FR-STOR-003 (metadata store, immutable IDs) | **Conflict.** There is no metadata store and no repository ID. The directory name is the only record a repository exists. | [store.rs](../../crates/git/src/store.rs) |
+| FR-STOR-004, FR-STOR-006 (ID-based paths; renames don't move data) | **Conflict.** The path is `<root>/<name>.git`, so a future rename will have to move directories. | [store.rs:27-29](../../crates/git/src/store.rs#L27-L29) |
+| FR-STOR-005 (atomic create) | **Conflict.** `create` checks `path.exists()` and then calls `gix::init_bare` on the final path. Two simultaneous creates can both pass the check, so the loser may get an internal error rather than "already exists". Meanwhile `list()` can show a directory that is only partly initialised, and `open` then fails on it. | [store.rs:35-43](../../crates/git/src/store.rs#L35-L43) |
+| FR-STOR-007 (usable paths on every platform) | **Conflict (verified).** On Windows, `POST /api/repos {"name":"con"}` succeeds and `con` shows up in the listing, but `git clone http://…/con.git` fails with HTTP 500 because `git upload-pack` rejects the path. The same applies to `nul`, `aux`, `prn`, `com1`–`com9` and `lpt1`–`lpt9`. | [name.rs:31-36](../../crates/git/src/name.rs#L31-L36), [store.rs:27-29](../../crates/git/src/store.rs#L27-L29) |
+| FR-STOR-020 (report inconsistencies) | **Conflict.** `list()` silently skips directories whose names aren't already normalised, e.g. a hand-made `Demo.git`, and anything else it can't parse. Nothing is logged, so an admin gets no hint the data exists. | [store.rs:52-75](../../crates/git/src/store.rs#L52-L75) |
+| NFR-STOR-001 (durable pushes) | **Not ensured.** Repositories are created without `core.fsync` settings, so durability depends on git's defaults for the installed version. | [store.rs:35-43](../../crates/git/src/store.rs#L35-L43) |
+
+FR-STOR-008 is met today: every path is lowercased, so behaviour is the same on every filesystem. Keep that property through any redesign.

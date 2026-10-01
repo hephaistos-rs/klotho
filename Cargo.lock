@@ -503,15 +503,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "git"
-version = "0.1.0"
-dependencies = [
- "gix",
- "serde",
- "thiserror",
-]
-
-[[package]]
 name = "gix"
 version = "0.87.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1681,17 +1672,50 @@ name = "klotho"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
+ "klotho-git",
+ "klotho-server",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "klotho-core"
+version = "0.1.0"
+
+[[package]]
+name = "klotho-git"
+version = "0.1.0"
+dependencies = [
+ "gix",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "klotho-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "async-compression",
  "axum",
  "futures-util",
- "git",
+ "klotho-git",
  "serde",
  "serde_json",
  "tokio",
  "tokio-util",
  "tracing",
- "tracing-subscriber",
 ]
+
+[[package]]
+name = "klotho-ssh"
+version = "0.1.0"
+
+[[package]]
+name = "klotho-web"
+version = "0.1.0"
 
 [[package]]
 name = "lazy_static"
@@ -2445,6 +2469,10 @@ checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link",
 ]
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
 
 [[package]]
 name = "zlib-rs"

@@ -20,7 +20,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use futures_util::TryStreamExt;
-use git::{RepoName, RepoStore};
+use klotho_git::{RepoName, RepoStore};
 use serde::Deserialize;
 use tokio::io::AsyncRead;
 use tokio::process::Command;
@@ -170,7 +170,7 @@ async fn rpc(
 fn repo_path(store: &RepoStore, repo: &str) -> Result<std::path::PathBuf, AppError> {
     let name: RepoName = repo.parse()?;
     if !store.exists(&name) {
-        return Err(git::Error::RepoNotFound(name.to_string()).into());
+        return Err(klotho_git::Error::RepoNotFound(name.to_string()).into());
     }
     Ok(store.path(&name))
 }

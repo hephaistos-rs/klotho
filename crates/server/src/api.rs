@@ -14,7 +14,7 @@ use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
-use git::{CommitInfo, RepoInfo, RepoName, RepoStore, TreeEntryInfo};
+use klotho_git::{CommitInfo, RepoInfo, RepoName, RepoStore, TreeEntryInfo};
 use serde::Deserialize;
 
 use crate::error::AppError;
@@ -50,7 +50,7 @@ fn default_rev() -> String {
 
 /// gix is synchronous, so repository work runs on the blocking thread pool.
 async fn blocking<T: Send + 'static>(
-    f: impl FnOnce() -> git::Result<T> + Send + 'static,
+    f: impl FnOnce() -> klotho_git::Result<T> + Send + 'static,
 ) -> Result<T, AppError> {
     Ok(tokio::task::spawn_blocking(f).await??)
 }
@@ -105,7 +105,7 @@ async fn raw(
     Query(query): Query<RevQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let name: RepoName = repo.parse()?;
-    let data = blocking(move || git::read_blob(&store.open(&name)?, &query.rev, &query.path)).await?;
+    let data = blocking(move || klotho_git::read_blob(&store.open(&name)?, &query.rev, &query.path)).await?;
     // Always octet-stream so a stored HTML file can't run as a page on this origin.
     Ok(([(header::CONTENT_TYPE, "application/octet-stream")], data))
 }

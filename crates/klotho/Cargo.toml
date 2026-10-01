@@ -1,0 +1,15 @@
+[package]
+name = "klotho"
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+klotho-git.workspace = true
+klotho-server.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

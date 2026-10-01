@@ -3,11 +3,11 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
-/// Error type for handlers: known `git::Error`s map to 4xx, everything else is a
+/// Error type for handlers: known `klotho_git::Error`s map to 4xx, everything else is a
 /// logged 500 whose details are not sent to the client.
 #[derive(Debug)]
 pub enum AppError {
-    Git(git::Error),
+    Git(klotho_git::Error),
     Internal(anyhow::Error),
 }
 
@@ -15,12 +15,12 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let status = match &self {
             Self::Git(err) => match err {
-                git::Error::InvalidName(_) => StatusCode::BAD_REQUEST,
-                git::Error::RepoNotFound(_)
-                | git::Error::RevisionNotFound(_)
-                | git::Error::PathNotFound(_) => StatusCode::NOT_FOUND,
-                git::Error::RepoExists(_) => StatusCode::CONFLICT,
-                git::Error::Io(_) | git::Error::Git(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                klotho_git::Error::InvalidName(_) => StatusCode::BAD_REQUEST,
+                klotho_git::Error::RepoNotFound(_)
+                | klotho_git::Error::RevisionNotFound(_)
+                | klotho_git::Error::PathNotFound(_) => StatusCode::NOT_FOUND,
+                klotho_git::Error::RepoExists(_) => StatusCode::CONFLICT,
+                klotho_git::Error::Io(_) | klotho_git::Error::Git(_) => StatusCode::INTERNAL_SERVER_ERROR,
             },
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
@@ -38,8 +38,8 @@ impl IntoResponse for AppError {
     }
 }
 
-impl From<git::Error> for AppError {
-    fn from(err: git::Error) -> Self {
+impl From<klotho_git::Error> for AppError {
+    fn from(err: klotho_git::Error) -> Self {
         Self::Git(err)
     }
 }

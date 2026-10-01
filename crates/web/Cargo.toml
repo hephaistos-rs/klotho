@@ -1,0 +1,8 @@
+[package]
+name = "klotho-web"
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
