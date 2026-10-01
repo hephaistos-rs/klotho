@@ -12,6 +12,7 @@
 |---|---|
 | [decisions/0001-stack.md](decisions/0001-stack.md) | Technology stack: gix plus the `git` program, axum, sqlx (its SvelteKit frontend is superseded by ADR 0002) |
 | [decisions/0002-topcoat-ui.md](decisions/0002-topcoat-ui.md) | Web UI: server-rendered with Topcoat, mounted inside axum, assets embedded in the binary |
+| [decisions/0003-data-and-file-storage.md](decisions/0003-data-and-file-storage.md) | One data directory; git repositories on local disk; other files (LFS, releases, attachments) local or in S3 |
 
 ## Design
 

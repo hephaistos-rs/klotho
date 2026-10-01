@@ -13,9 +13,9 @@ async fn main() -> anyhow::Result<()> {
 
     // TODO: move to a config file once there is more to configure.
     let addr: SocketAddr = env::var("KLOTHO_ADDR")
-        .unwrap_or_else(|_| "127.0.0.1:3000".into())
+        .unwrap_or_else(|_| "0.0.0.0:3000".into())
         .parse()?;
-    let store = RepoStore::new(env::var("KLOTHO_REPOS").unwrap_or_else(|_| "testRepos".into()))?;
+    let store = RepoStore::new(env::var("KLOTHO_REPOS").unwrap_or_else(|_| "data/repositories".into()))?;
 
     tracing::info!(%addr, repos = %store.root().display(), "Klotho listening");
 

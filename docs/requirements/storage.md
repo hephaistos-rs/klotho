@@ -1,6 +1,6 @@
 # Storage requirements
 
-**Scope:** where and how Klotho keeps its data. That means the git data on disk, the metadata store, how repository identities map to paths, atomicity, durability, integrity, housekeeping, backup and quotas.
+**Scope:** where and how Klotho keeps its data. That means the data directory, the git data on disk, the metadata store, file storage for non-git data (local or S3), how repository identities map to paths, atomicity, durability, integrity, housekeeping, backup and quotas. See [ADR 0003](../decisions/0003-data-and-file-storage.md).
 
 **Not in scope:** name syntax ([naming.md](naming.md)), repository lifecycle operations ([repositories.md](repositories.md)), and how fast storage has to be ([performance.md](performance.md)).
 
@@ -17,8 +17,21 @@
 | FR-STOR-007 | Any path built from a user-supplied value **must** be a valid, usable git repository path on every supported platform. On Windows this means it can't be a device name (`con`, `prn`, `aux`, `nul`, `com1`–`com9`, `lpt1`–`lpt9`, any case, with or without an extension). | Verified: Git for Windows refuses to use `con.git` although the OS creates it (see [forge-comparison.md § 5](../research/forge-comparison.md#5-how-names-map-to-paths-on-disk)). FR-STOR-004 satisfies this automatically. | must-have |
 | FR-STOR-008 | Storage **must** behave the same on case-sensitive and case-insensitive filesystems. Two names that differ only in case must never map to two different paths. | Gitea lowercases paths for exactly this reason. Klotho is developed on Windows and deployed on Linux. | must-have |
 | FR-STOR-009 | A repository's wiki (if implemented) **should** be stored as a sibling bare repository derived from the same ID, e.g. `<h>.wiki.git`. | GitLab, Gitea and GitHub all keep the wiki as a separate git repository next to the main one. | nice-to-have |
-| FR-STOR-010 | The storage root **must** be configurable. | Universal. | must-have |
+| FR-STOR-010 | The storage root **must** be configurable. It defaults to `<data_dir>/repositories` (FR-STOR-012). | Universal. | must-have |
+| FR-STOR-012 | All local state **must** live under one configurable data directory by default: `repositories/`, the SQLite database and `files/` (FR-STOR-060). Each location **may** be overridden on its own. A relative path **must** be resolved against the config file's directory, not the current directory, and the resolved absolute paths **must** be logged at startup. | Gitea's `APP_DATA_PATH`. One folder makes installs, backups and container volumes simple. Resolving against the current directory means starting the server from another folder silently creates an empty instance. | must-have |
 | FR-STOR-011 | Klotho **may** support several storage roots, choosing one per repository when it is created. | GitLab lets admins spread repositories over several storage locations to grow capacity. | nice-to-have |
+
+## File storage (non-git data)
+
+Git LFS objects, release assets, attachments, avatars, cached archives and backups: large files that Klotho stores and serves but never reads with git. See [ADR 0003](../decisions/0003-data-and-file-storage.md).
+
+| ID | Requirement | Rationale | Priority |
+|---|---|---|---|
+| FR-STOR-060 | All non-git files **must** be stored through one file storage interface, with a local directory (`<data_dir>/files/`) as the default backend. | One code path for uploads, downloads, deletion and backup, whatever the backend. | must-have |
+| FR-STOR-061 | File storage **should** also support any S3-compatible object store (AWS S3, MinIO, Garage, Cloudflare R2, Backblaze B2), configured by bucket, region, endpoint URL, path-style addressing and credentials. | Gitea, Forgejo and GitLab all offer this. LFS and release assets are what fills disks, and object storage is cheaper and grows without resizing. | should-have |
+| FR-STOR-062 | The metadata store **must** refer to files by a relative key (e.g. `lfs/ab/cd/<oid>`), never by a filesystem path or URL. | Moving between backends is then a plain copy with no database migration. | must-have |
+| FR-STOR-063 | Downloads **must** be authorised by Klotho first. With an S3 backend, Klotho **may** then redirect to a presigned URL valid for at most 5 minutes instead of streaming the file itself. | Large downloads skip the Klotho server. A short expiry limits how long a URL works after access is revoked. | should-have |
+| FR-STOR-064 | Git repositories **must** be stored on a local or block-device filesystem. They **must not** be stored in object storage or on a bucket mounted as a filesystem. | git needs atomic renames, lock files, random reads and `fsync`, which object storage doesn't provide. Every comparable forge keeps repositories on local disk. | must-have |
 
 ## Consistency
 
@@ -42,6 +55,7 @@
 |---|---|---|---|
 | FR-STOR-040 | Administrators **must** be able to take a consistent backup of all git data and metadata while the server is running. | GitLab `backup create` and Gitea `dump`. Self-hosters are their own disaster recovery. | must-have |
 | FR-STOR-041 | Administrators **must** be able to restore a backup onto a fresh install of the same version, ending with an identical set of repositories, refs, owners and redirects. | A backup that can't be restored is worth nothing. GitLab and Gitea both document the restore path. | must-have |
+| FR-STOR-042 | Backups **must** include the file storage when it's local. When it's S3, the admin **must** be able to choose between copying the files into the backup and relying on the bucket's own versioning or replication, and the backup **must** record which was chosen. | Otherwise restoring brings back database rows whose LFS objects or attachments are missing. | must-have |
 | NFR-STOR-010 | The backup and restore procedure **should** be covered by an automated test that backs up, restores and compares all refs. | Makes FR-STOR-041 verifiable. | should-have |
 
 ## Quotas and deduplication
@@ -62,6 +76,7 @@ Checked against commit `6b4895f`.
 | FR-STOR-005 (atomic create) | **Conflict.** `create` checks `path.exists()` and then calls `gix::init_bare` on the final path. Two simultaneous creates can both pass the check, so the loser may get an internal error rather than "already exists". Meanwhile `list()` can show a directory that is only partly initialised, and `open` then fails on it. | [store.rs:35-43](../../crates/git/src/store.rs#L35-L43) |
 | FR-STOR-007 (usable paths on every platform) | **Conflict (verified).** On Windows, `POST /api/repos {"name":"con"}` succeeds and `con` shows up in the listing, but `git clone http://…/con.git` fails with HTTP 500 because `git upload-pack` rejects the path. The same applies to `nul`, `aux`, `prn`, `com1`–`com9` and `lpt1`–`lpt9`. | [name.rs:31-36](../../crates/git/src/name.rs#L31-L36), [store.rs:27-29](../../crates/git/src/store.rs#L27-L29) |
 | FR-STOR-020 (report inconsistencies) | **Conflict.** `list()` silently skips directories whose names aren't already normalised, e.g. a hand-made `Demo.git`, and anything else it can't parse. Nothing is logged, so an admin gets no hint the data exists. | [store.rs:52-75](../../crates/git/src/store.rs#L52-L75) |
+| FR-STOR-012 (one data directory, resolved against the config file) | **Partial.** The only setting is `KLOTHO_REPOS`. Its default, `data/repositories`, is resolved against the current directory. For development, `.cargo/config.toml` sets it to `<repo root>/testRepos`. | [main.rs:18](../../crates/klotho/src/main.rs#L18) |
 | NFR-STOR-001 (durable pushes) | **Not ensured.** Repositories are created without `core.fsync` settings, so durability depends on git's defaults for the installed version. | [store.rs:35-43](../../crates/git/src/store.rs#L35-L43) |
 
 FR-STOR-008 is met today: every path is lowercased, so behaviour is the same on every filesystem. Keep that property through any redesign.

@@ -1,2 +1,9 @@
 [alias]
 xtask = "run --package xtask --"
+
+# Development defaults for `cargo run`. They apply only to commands run through
+# Cargo, and a variable already set in your shell takes precedence.
+# `relative = true` resolves the path against the repository root, so it doesn't
+# matter which folder you run from.
+[env]
+KLOTHO_REPOS = { value = "testRepos", relative = true }
