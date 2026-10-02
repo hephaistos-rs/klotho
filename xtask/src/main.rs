@@ -6,8 +6,13 @@
 //!   embedded (ADR 0002), written to `dist/`.
 //!
 //! - `sqlx-prepare`: regenerates `.sqlx/` after a query or migration changes.
+//! - `ci`: every check a change must pass, stopping at the first failure: format,
+//!   clippy, tests, `cargo deny` and `dist`. Run it by hand before pushing; Lachesis
+//!   will run the same command.
 //!
-//! `dev` and `dist` need the Topcoat CLI: `cargo install topcoat-cli --version 0.9.0 --locked`.
+//! `dev`, `dist` and `ci` need the Topcoat CLI: `cargo install topcoat-cli --version 0.9.0 --locked`.
+//! `ci` also needs cargo-deny (`cargo install cargo-deny --locked`) and the `git` client, which
+//! the end-to-end tests drive.
 //! `sqlx-prepare` needs sqlx-cli: `cargo install sqlx-cli --version 0.9.0 --no-default-features --features sqlite --locked`.
 
 use std::io::{Read, Write};
@@ -24,8 +29,28 @@ fn main() -> Result {
         Some("dev") => dev(),
         Some("dist") => dist(),
         Some("sqlx-prepare") => sqlx_prepare(),
-        _ => Err("usage: cargo xtask <dev|dist|sqlx-prepare>".into()),
+        Some("ci") => ci(),
+        _ => Err("usage: cargo xtask <ci|dev|dist|sqlx-prepare>".into()),
     }
+}
+
+/// The checks every change must pass, in order from fastest to slowest, so a
+/// formatting slip fails in seconds rather than after the test suite.
+fn ci() -> Result {
+    let root = workspace_root();
+    let cargo = || {
+        let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+        cmd.current_dir(&root);
+        cmd
+    };
+    let start = Instant::now();
+    run(cargo().args(["fmt", "--all", "--check"]))?;
+    run(cargo().args(["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]))?;
+    run(cargo().args(["test", "--workspace"]))?;
+    run(cargo().args(["deny", "check"]))?;
+    dist()?;
+    println!("\nci: all checks passed in {}s", start.elapsed().as_secs());
+    Ok(())
 }
 
 /// Regenerates `.sqlx/`, the cached query metadata that lets `sqlx::query!`

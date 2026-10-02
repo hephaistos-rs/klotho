@@ -68,7 +68,7 @@ It covers:
 
 ### Testing
 
-- **End-to-end tests keep using the real `git` client** against the real Klotho binary. That's a test-time dependency only, and it's the point: the client is the reference implementation we must interoperate with. CI runs it on Linux and Windows.
+- **End-to-end tests keep using the real `git` client** against the real Klotho binary. That's a test-time dependency only, and it's the point: the client is the reference implementation we must interoperate with. `cargo xtask ci` runs it; Linux and Windows both have to pass (see NFR-OPS-002 in operations.md for how Linux is covered today).
 - The protocol parsers handle untrusted input from the network, so they get fuzz targets (`cargo fuzz`) from the start.
 - A test matrix covers protocol v0, v1 and v2, shallow and partial clones, thin packs, atomic pushes, and pushes rejected by pre-receive (the client must show our message).
 

@@ -189,7 +189,7 @@ Phases run in order: 0, 1, 1b, 2 and onwards. Phase 1b (the native git transport
 - ~~A git version check at startup (≥ 2.39).~~ Removed in Phase 1b: Klotho no longer runs `git` at all ([ADR 0004](docs/decisions/0004-native-git-transport.md)).
 - ~~`tower-http` layers: tracing (path only, never the query string), request IDs (an incoming `X-Request-Id` is kept), a timeout on everything except git transport, a body limit on `/api`. Unknown `/api` paths get a JSON 404.~~
 - ~~`/-/health`.~~
-- ~~CI (GitHub Actions): `cargo fmt --check`, `clippy -D warnings` and `cargo test` on Linux and Windows; `cargo deny check`; `cargo xtask dist`.~~
+- ~~CI (GitHub Actions): `cargo fmt --check`, `clippy -D warnings` and `cargo test` on Linux and Windows; `cargo deny check`; `cargo xtask dist`.~~ Replaced on 2026-10-02 by `cargo xtask ci`, which runs the same checks locally. Klotho is developed on Klotho, not GitHub; Lachesis will run `cargo xtask ci` once it exists.
 - ~~**Topcoat spike:** `klotho-web` with a hello page, mounted as axum's fallback, and `cargo xtask dist` producing one binary that serves its CSS from `/-/assets/`.~~ `cargo xtask dev` runs `topcoat dev` with the dev config.
 
 **Requirements:** NFR-OPS-003, 010, 011, 012, 022 (health), 030; NFR-SEC-020 (partly).
@@ -257,7 +257,7 @@ Phases run in order: 0, 1, 1b, 2 and onwards. Phase 1b (the native git transport
 **New packages:** `gix-pack` with its `generate` (pack writing) and `streaming-input` (pack indexing) features, pinned to the exact version `gix` uses, since gix enables neither; `cargo-fuzz` as a tool. pkt-lines are our own small module instead of `gix-packetline`, with our own limits on untrusted input and none of the client-side feature flags.
 
 **Done when:**
-- [ ] The end-to-end suite (real `git` client against the server, Linux and Windows) passes for: clone, fetch, push, force push, delete a branch, push tags, `--atomic` with one ref rejected, `--depth 1`, `--shallow-since`, `--filter=blob:none`, and protocol v0, v1 and v2 (`-c protocol.version=N`). *Everything except `--filter` (step 5) passes on Windows; Linux runs in CI.*
+- [ ] The end-to-end suite (real `git` client against the server, Linux and Windows) passes for: clone, fetch, push, force push, delete a branch, push tags, `--atomic` with one ref rejected, `--depth 1`, `--shallow-since`, `--filter=blob:none`, and protocol v0, v1 and v2 (`-c protocol.version=N`). *Everything except `--filter` (step 5) passes on Windows. Linux is run by hand until Lachesis runs `cargo xtask ci`.*
 - [ ] A push of 2 GiB doesn't grow server memory (NFR-PERF-004). *The pack streams from the request into `gix-pack`'s indexer, but this hasn't been measured.*
 - [x] Killing the client mid-push leaves no new refs and no files outside the quarantine. The quarantine is cleaned up. (`an_interrupted_push_leaves_nothing_behind`)
 - [x] A pushed pack missing an object the new ref needs is rejected, and the client prints our message. (`a_pack_missing_objects_is_rejected_and_never_stored`)
@@ -582,6 +582,8 @@ This is the biggest phase. Split it into three releases and ship each one before
 ---
 
 ## 4. Working agreements
+
+- **`cargo xtask ci` passes before every commit lands on `master`.** It runs `cargo fmt --check`, clippy with `-D warnings`, the whole test suite, `cargo deny check` and `cargo xtask dist`, and stops at the first failure. There is no hosted CI: Klotho is developed on Klotho, and Lachesis will run this same command. Until then, run it on Linux by hand before a release (NFR-OPS-002).
 
 - **UI and API move together.** A PR that adds a UI action adds the API endpoint in the same PR, both calling the same `klotho-core` service (FR-API-004). Account security pages are the only exception.
 - **Every change names the requirement IDs it implements**, in the commit message or PR description. When code and requirements disagree, update the requirement or file a conflict. Don't let them drift silently.

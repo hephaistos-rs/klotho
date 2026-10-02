@@ -49,6 +49,14 @@ Each component can run on its own, but together they take your code from its fir
 
 Contributions are welcome! Please open an issue to discuss larger changes before submitting a pull request.
 
+Before sending a change, run every check it has to pass:
+
+```sh
+cargo xtask ci
+```
+
+That's format, clippy with `-D warnings`, the tests (which drive the real `git` client), `cargo deny check` and the single-binary release build. It needs `git`, `cargo install cargo-deny --locked` and `cargo install topcoat-cli --version 0.9.0 --locked`. There's no hosted CI; Lachesis will run this same command.
+
 <!-- TODO: link to CONTRIBUTING.md if you add one -->
 
 ## License
