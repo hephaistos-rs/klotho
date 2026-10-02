@@ -10,10 +10,10 @@
 
 | ID | Requirement | Rationale | Priority |
 |---|---|---|---|
-| NFR-PERF-001 | A full clone over HTTP **should** take no more than 110% of the time the same clone takes from `git http-backend` behind a minimal web server on the same host. | Klotho delegates to `git upload-pack`, so its own overhead (proxying, auth, streaming) should be small. `git http-backend` is the natural baseline. | should-have |
+| NFR-PERF-001 | A full clone over HTTP **should** take no more than 110% of the time the same clone takes from `git http-backend` behind a minimal web server on the same host. | `git http-backend` is the natural baseline. Klotho builds packs itself with `gix-pack`, which reuses existing deltas but doesn't search for new ones and never sends thin packs, so this is where that shows ([ADR 0004](../decisions/0004-native-git-transport.md)). | should-have |
 | NFR-PERF-002 | A no-op fetch (client already up to date) of the large repository **should** finish in under 1 s at p95 with protocol v2. | Protocol v2 ref filtering makes this possible. CI polls often, so no-op fetches are the most common request. | should-have |
 | NFR-PERF-003 | The server **must** handle 100 simultaneous clones of a medium repository (100 MiB) without any of them failing. Requests over the concurrency cap (NFR-SEC-022) wait in a queue instead of failing. | Many CI jobs start at once after a push. | must-have |
-| NFR-PERF-004 | Pack data **must** be streamed between client and git in both directions. Server memory **must not** grow with pack size. | Gitea and GitLab stream packs. Buffering a 2 GiB push in memory would exhaust RAM. | must-have |
+| NFR-PERF-004 | Pack data **must** be streamed between the client and the repository in both directions. Server memory **must not** grow with pack size. | Gitea and GitLab stream packs. Buffering a 2 GiB push in memory would exhaust RAM. | must-have |
 
 ## API and UI latency
 

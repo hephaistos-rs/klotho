@@ -7,7 +7,7 @@
 
 Klotho stores three kinds of data:
 
-1. **Git repositories.** They're read with gix and served by running `git upload-pack` / `git receive-pack` ([ADR 0001](0001-stack.md)).
+1. **Git repositories.** They're read with gix and served by Klotho's own protocol engine on top of gitoxide ([ADR 0004](0004-native-git-transport.md); this ADR originally said `git upload-pack` / `git receive-pack`, per [ADR 0001](0001-stack.md)).
 2. **Metadata.** SQLite by default, PostgreSQL optionally (FR-STOR-002).
 3. **Everything else: large, write-once files that Klotho only stores and serves.** Git LFS objects (FR-GIT-030), release assets (FR-COLLAB-030), issue and pull request attachments, avatars, cached archive downloads (FR-GIT-012) and backups (FR-STOR-040).
 

@@ -44,8 +44,8 @@ Git LFS objects, release assets, attachments, avatars, cached archives and backu
 
 | ID | Requirement | Rationale | Priority |
 |---|---|---|---|
-| NFR-STOR-001 | Once a push has been reported as successful, its objects and ref updates **must** survive power loss. For example, git must run with `core.fsync` covering committed objects and refs. | Git only guarantees this with the right `core.fsync` settings. Losing data after telling the client the push succeeded is the worst failure a forge can have. | must-have |
-| NFR-STOR-002 | A push interrupted at any point **must** leave refs either fully at their old values or fully at their new values. It must never leave a ref pointing to a missing object. | `git receive-pack` guarantees this when refs are updated through it. Klotho must not bypass it. | must-have |
+| NFR-STOR-001 | Once a push has been reported as successful, its objects and ref updates **must** survive power loss: Klotho flushes the pack, the refs and their directories to disk before answering. | Losing data after telling the client the push succeeded is the worst failure a forge can have. Reworded 2026-10-02 ([ADR 0004](../decisions/0004-native-git-transport.md)): it used to rely on git's `core.fsync`. | must-have |
+| NFR-STOR-002 | A push interrupted at any point **must** leave refs either fully at their old values or fully at their new values. It must never leave a ref pointing to a missing object. | Klotho's receive-pack checks the pack in quarantine, moves it into place, and only then updates refs, with locks. | must-have |
 | FR-STOR-030 | Klotho **should** run a scheduled integrity check (`git fsck` or equivalent) over all repositories and report failures to administrators. | GitLab (repository checks) and Gitea (cron `git fsck`). | should-have |
 | FR-STOR-031 | Klotho **should** run repository housekeeping (repack, prune, commit-graph and bitmap generation) on a schedule and after a configurable number of pushes. | GitLab housekeeping and Gitea `git gc` cron. Stops fetches slowing down as repositories age. | should-have |
 
@@ -67,13 +67,11 @@ Git LFS objects, release assets, attachments, avatars, cached archives and backu
 
 ## Conflicts with the current implementation
 
-Checked after Phase 1 (2026-10-01).
-
-| Requirement | Current behaviour | Where |
-|---|---|---|
-| NFR-STOR-001 (durable pushes) | **Not ensured.** Pushes still go through `git receive-pack` with git's default `core.fsync`. The native engine (Phase 1b, ADR 0004) fsyncs packs and refs itself. | [git_http.rs](../../crates/server/src/git_http.rs) |
+Checked after Phase 1b (2026-10-02). No conflicts are open.
 
 Met today:
+- NFR-STOR-001 (the pushed pack and index, the updated refs, `packed-refs` and their directories are fsynced before the client gets its report; Windows has no directory fsync, and NTFS journals renames).
+- NFR-STOR-002 (a push is indexed and checked in a quarantine under `.tmp/`, which is emptied at startup; refs change only after the pack is in place, in `gix-ref` transactions with the client's expected old values; tested by cutting a push off mid-pack).
 - FR-STOR-001, 003 (a SQLite metadata store; repository IDs that are never reused, thanks to `AUTOINCREMENT`).
 - FR-STOR-004, 006, 007, 008 (paths derived from a hash of the ID, so names never reach the filesystem: renames won't move data, and `con` or `Demo`/`demo` mean nothing to the filesystem).
 - FR-STOR-005 (atomic create: the unique index decides races, the repository is initialised in `.tmp/` and renamed into place; 50 concurrent creates give one success and no leftovers, tested).

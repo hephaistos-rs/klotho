@@ -65,22 +65,38 @@ pub async fn start(grace: Duration) -> Running {
 /// Git runs with an empty config so the developer's own settings (credential
 /// helpers, URL rewrites, protocol versions) can't change the outcome.
 pub fn git_output(dir: &Path, args: &[&str]) -> (String, String) {
+    git_output_env(dir, &[], args)
+}
+
+/// [`git_output`] with extra environment variables, e.g. `GIT_COMMITTER_DATE`.
+pub fn git_output_env(dir: &Path, env: &[(&str, &str)], args: &[&str]) -> (String, String) {
+    let output = git_command(dir, args).envs(env.iter().copied()).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(output.status.success(), "git {args:?} failed:\n{stderr}");
+    (String::from_utf8_lossy(&output.stdout).into_owned(), stderr)
+}
+
+/// Runs `git` in `dir` and returns whether it succeeded, with its stderr.
+pub fn git_try(dir: &Path, args: &[&str]) -> (bool, String) {
+    let output = git_command(dir, args).output().unwrap();
+    (output.status.success(), String::from_utf8_lossy(&output.stderr).into_owned())
+}
+
+/// `git` with `args`, an empty config and a test identity.
+pub fn git_command(dir: &Path, args: &[&str]) -> Command {
     let empty_config = std::env::temp_dir().join(format!("klotho-test-gitconfig-{}", std::process::id()));
     if !empty_config.exists() {
         std::fs::write(&empty_config, "").unwrap();
     }
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .args(["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "init.defaultBranch=main"])
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", &empty_config)
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    assert!(output.status.success(), "git {args:?} failed:\n{stderr}");
-    (String::from_utf8_lossy(&output.stdout).into_owned(), stderr)
+        .env("GIT_TERMINAL_PROMPT", "0");
+    command
 }
 
 /// Runs `git` in `dir` and returns stdout, failing the test with git's stderr.

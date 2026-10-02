@@ -4,31 +4,23 @@
 //! Over HTTP every request is complete in itself, so each call handles one
 //! command from a fully read request body.
 
-use std::collections::HashSet;
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use std::sync::atomic::AtomicBool;
 
 use gix::hash::ObjectId;
-use gix::objs::Kind;
 
-use super::pack::{PackRequest, write_pack};
+use super::fetch::{PackOptions, check_wants, common_commits, send_pack, write_shallow_lines};
 use super::pktline::{self, Packet, Reader};
-use super::sideband::SidebandWriter;
-use super::{ProtocolError, ServeError};
-use crate::Error;
-
-/// Most `want` and `have` lines a single request may carry. Git sends haves in
-/// rounds of at most a few hundred, and wants are bounded by the number of refs.
-const MAX_LINES: usize = 100_000;
+use super::refs::advertised_refs;
+use super::select::{ShallowRequest, parse_id, select};
+use super::{MAX_LINES, ProtocolError, ServeError, answer_error};
 
 /// What `git` sees when it asks which protocol features we have.
 pub fn write_advertisement(out: &mut impl Write) -> std::io::Result<()> {
     pktline::write_line(out, "version 2")?;
     pktline::write_line(out, &format!("agent=klotho/{}", env!("CARGO_PKG_VERSION")))?;
     pktline::write_line(out, "ls-refs=unborn")?;
-    // Shallow fetches are advertised, as `git upload-pack` does, but the caller
-    // hands them to the `git` program until this engine supports them (Phase 1b,
-    // step 4; see `needs_git_program`). Filters are off, as in git's default.
+    // Partial clone filters are off, as in git's default.
     pktline::write_line(out, "fetch=shallow")?;
     pktline::write_line(out, "server-option")?;
     pktline::write_line(out, "object-format=sha1")?;
@@ -63,27 +55,6 @@ pub fn serve(
         Err(ServeError::Protocol(err)) => answer_error(out, err),
         other => other,
     }
-}
-
-/// Whether `request` uses a feature this engine doesn't implement yet, so the
-/// caller must hand it to the `git` program instead: shallow fetches
-/// (`shallow`, `deepen…`). Interim, until Phase 1b step 4.
-pub fn needs_git_program(request: &[u8]) -> bool {
-    let mut reader = Reader::new(request);
-    while let Ok(Some(packet)) = reader.next_packet() {
-        if let Ok(line) = packet.as_line()
-            && (line.starts_with("shallow ") || line.starts_with("deepen"))
-        {
-            return true;
-        }
-    }
-    false
-}
-
-fn answer_error(out: &mut dyn Write, err: ProtocolError) -> Result<(), ServeError> {
-    pktline::write_line(out, &format!("ERR {err}"))?;
-    pktline::write_flush(out)?;
-    Ok(())
 }
 
 /// The capability section: `command=…`, then capabilities, up to a delimiter.
@@ -127,54 +98,6 @@ fn read_args<'a>(reader: &mut Reader<'a>) -> Result<Vec<&'a str>, ProtocolError>
     }
 }
 
-/// One ref as `ls-refs` reports it.
-struct RefLine {
-    name: String,
-    /// `None` for an unborn HEAD.
-    id: Option<ObjectId>,
-    symref_target: Option<String>,
-    /// The object an annotated tag points at, after peeling.
-    peeled: Option<ObjectId>,
-}
-
-/// Every ref, with HEAD first. These are also the only objects `fetch` accepts
-/// as wants, so nothing unadvertised can be fetched by ID.
-fn advertised_refs(repo: &gix::Repository) -> Result<Vec<RefLine>, Error> {
-    let mut lines = Vec::new();
-    let head = repo.head().map_err(Error::git)?;
-    let head_target = head.referent_name().map(|name| name.as_bstr().to_string());
-    let head_id = head.id().map(|id| id.detach());
-    lines.push(RefLine { name: "HEAD".to_owned(), id: head_id, symref_target: head_target, peeled: None });
-
-    let platform = repo.references().map_err(Error::git)?;
-    let mut refs = Vec::new();
-    for reference in platform.all().map_err(Error::git)? {
-        let mut reference = reference.map_err(Error::Git)?;
-        let name = reference.name().as_bstr().to_string();
-        let symref_target = reference.target().try_name().map(|target| target.as_bstr().to_string());
-        // Read the direct target before anything else: gix peels references in place.
-        let id = match reference.target().try_id() {
-            Some(id) => id.to_owned(),
-            None => match reference.peel_to_id() {
-                Ok(id) => id.detach(),
-                Err(_) => continue, // a symbolic ref to a missing ref
-            },
-        };
-        let Ok(object) = repo.find_object(id) else {
-            continue; // a ref to a missing object
-        };
-        let peeled = if object.kind == Kind::Tag {
-            Some(object.peel_tags_to_end().map_err(Error::git)?.id)
-        } else {
-            None
-        };
-        refs.push(RefLine { name, id: Some(id), symref_target, peeled });
-    }
-    refs.sort_by(|a, b| a.name.cmp(&b.name));
-    lines.extend(refs);
-    Ok(lines)
-}
-
 fn ls_refs(repo: &gix::Repository, reader: &mut Reader<'_>, out: &mut dyn Write) -> Result<(), ServeError> {
     let (mut symrefs, mut peel, mut unborn, mut prefixes) = (false, false, false, Vec::new());
     for arg in read_args(reader)? {
@@ -216,12 +139,14 @@ fn fetch(
     out: &mut dyn Write,
     interrupt: &AtomicBool,
 ) -> Result<(), ServeError> {
-    let (mut wants, mut haves) = (Vec::new(), Vec::new());
-    let (mut done, mut thin, mut no_progress, mut include_tags) = (false, false, false, false);
+    let (mut wants, mut haves) = (Vec::<ObjectId>::new(), Vec::new());
+    let mut shallow = ShallowRequest::default();
+    let (mut done, mut no_progress, mut include_tags) = (false, false, false);
     for arg in read_args(reader)? {
         match arg {
             "done" => done = true,
-            "thin-pack" => thin = true,
+            // Packs are never thin; see `pack.rs`.
+            "thin-pack" => {}
             "no-progress" => no_progress = true,
             "include-tag" => include_tags = true,
             "ofs-delta" => {}
@@ -230,11 +155,9 @@ fn fetch(
                     wants.push(parse_id(id)?);
                 } else if let Some(id) = arg.strip_prefix("have ") {
                     haves.push(parse_id(id)?);
-                } else if arg.starts_with("shallow ") || arg.starts_with("deepen") {
-                    return Err(ProtocolError::new("shallow clones aren't supported yet").into());
                 } else if arg.starts_with("filter ") {
-                    return Err(ProtocolError::new("partial clones (--filter) aren't supported yet").into());
-                } else {
+                    return Err(ProtocolError::new("partial clones (--filter) aren't supported").into());
+                } else if !shallow.parse_line(arg)? {
                     return Err(ProtocolError::new(format!("unknown fetch argument {arg:?}")).into());
                 }
             }
@@ -243,20 +166,8 @@ fn fetch(
     if wants.is_empty() {
         return Err(ProtocolError::new("fetch without any want").into());
     }
-
-    let advertised: HashSet<ObjectId> =
-        advertised_refs(repo)?.into_iter().flat_map(|line| line.id.into_iter().chain(line.peeled)).collect();
-    if let Some(unknown) = wants.iter().find(|want| !advertised.contains(*want)) {
-        return Err(ProtocolError::new(format!("upload-pack: not our ref {unknown}")).into());
-    }
-
-    // Haves that are commits we have too. Anything else is ignored.
-    let mut common = Vec::new();
-    for have in haves {
-        if repo.find_header(have).is_ok_and(|header| header.kind() == Kind::Commit) {
-            common.push(have);
-        }
-    }
+    check_wants(repo, &wants)?;
+    let common = common_commits(repo, &haves);
 
     if !done {
         pktline::write_line(out, "acknowledgments")?;
@@ -276,53 +187,20 @@ fn fetch(
         pktline::write_delim(out)?;
     }
 
-    pktline::write_line(out, "packfile")?;
-    let request = PackRequest { wants: &wants, common: &common, thin, include_tags };
-    let mut sideband = BufWriter::with_capacity(pktline::MAX_DATA - 1, SidebandWriter::new(&mut *out));
-    let result = write_pack(repo, &request, &mut sideband, interrupt);
-    let mut sideband = sideband.into_inner().map_err(|err| err.into_error())?;
-    match result {
-        Ok(objects) => {
-            if !no_progress {
-                sideband.progress(&format!("Klotho: sent {objects} objects\n"))?;
-            }
-        }
-        Err(err) => {
-            tracing::warn!(%err, "building a pack failed");
-            sideband.error("klotho: failed to build the pack; see the server log\n")?;
-        }
+    let selection = select(repo, &wants, &common, &shallow)?;
+    if shallow.deepens() {
+        pktline::write_line(out, "shallow-info")?;
+        write_shallow_lines(out, &selection)?;
+        pktline::write_delim(out)?;
     }
-    pktline::write_flush(sideband.into_inner())?;
-    Ok(())
-}
-
-fn parse_id(hex: &str) -> Result<ObjectId, ProtocolError> {
-    ObjectId::from_hex(hex.as_bytes()).map_err(|_| ProtocolError::new(format!("invalid object ID {hex:?}")))
+    pktline::write_line(out, "packfile")?;
+    let options = PackOptions { include_tags, progress: !no_progress, sideband: true };
+    send_pack(repo, &wants, &selection, &options, out, interrupt)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn request(lines: &[&str]) -> Vec<u8> {
-        let mut out = Vec::new();
-        pktline::write_line(&mut out, "command=fetch").unwrap();
-        pktline::write_delim(&mut out).unwrap();
-        for line in lines {
-            pktline::write_line(&mut out, line).unwrap();
-        }
-        pktline::write_flush(&mut out).unwrap();
-        out
-    }
-
-    #[test]
-    fn shallow_requests_go_to_the_git_program() {
-        let want = "want 0123456789012345678901234567890123456789";
-        assert!(needs_git_program(&request(&[want, "deepen 1"])));
-        assert!(needs_git_program(&request(&[want, "deepen-since 1700000000"])));
-        assert!(needs_git_program(&request(&[want, "shallow 0123456789012345678901234567890123456789"])));
-        assert!(!needs_git_program(&request(&[want, "done"])));
-    }
 
     #[test]
     fn advertises_what_git_clients_look_for() {

@@ -123,9 +123,6 @@ async fn serve(loaded: config::Loaded) -> anyhow::Result<()> {
         ),
     }
 
-    let git = klotho_git::check_git()?;
-    tracing::info!(%git, "found git");
-
     let core = open_core(&loaded).await?;
     // Disk and database disagreeing is reported, never silently ignored (FR-STOR-020).
     let report = core.storage_report().await?;

@@ -4,7 +4,7 @@
 //! then the data. Three lengths are special: `0000` (flush), `0001` (delimiter)
 //! and `0002` (response end). Lengths 1–3 are invalid.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 
 use super::ProtocolError;
 
@@ -72,17 +72,9 @@ impl<'a> Reader<'a> {
             return Ok(None);
         }
         let header = self.rest.get(..4).ok_or_else(|| ProtocolError::new("truncated pkt-line length"))?;
-        let len = std::str::from_utf8(header)
-            .ok()
-            .and_then(|hex| usize::from_str_radix(hex, 16).ok())
-            .ok_or_else(|| ProtocolError::new("invalid pkt-line length"))?;
-        let packet = match len {
-            0 => Packet::Flush,
-            1 => Packet::Delim,
-            2 => Packet::ResponseEnd,
-            3 => return Err(ProtocolError::new("invalid pkt-line length 3")),
-            _ if len > MAX_DATA + 4 => return Err(ProtocolError::new("pkt-line is too long")),
-            _ => {
+        let packet = match parse_length(header)? {
+            Length::Special(packet) => packet,
+            Length::Data(len) => {
                 let data = self.rest.get(4..len).ok_or_else(|| ProtocolError::new("truncated pkt-line"))?;
                 self.rest = &self.rest[len..];
                 return Ok(Some(Packet::Data(data)));
@@ -91,6 +83,79 @@ impl<'a> Reader<'a> {
         self.rest = &self.rest[4..];
         Ok(Some(packet))
     }
+}
+
+/// Reads pkt-lines one at a time from a stream, for requests too large to
+/// hold in memory (a push carries its pack after the pkt-lines). Reads exactly
+/// the bytes of each packet, so the stream is positioned right after it.
+pub struct StreamReader<R> {
+    inner: R,
+    buf: Vec<u8>,
+}
+
+impl<R: Read> StreamReader<R> {
+    pub fn new(inner: R) -> Self {
+        Self { inner, buf: Vec::new() }
+    }
+
+    pub fn into_inner(self) -> R {
+        self.inner
+    }
+
+    /// The next packet, or `None` if the stream ends before one starts.
+    pub fn next_packet(&mut self) -> Result<Option<Packet<'_>>, ReadError> {
+        let mut header = [0u8; 4];
+        let mut filled = 0;
+        while filled < 4 {
+            match self.inner.read(&mut header[filled..]) {
+                Ok(0) if filled == 0 => return Ok(None),
+                Ok(0) => return Err(ProtocolError::new("truncated pkt-line length").into()),
+                Ok(n) => filled += n,
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        match parse_length(&header)? {
+            Length::Special(packet) => Ok(Some(packet)),
+            Length::Data(len) => {
+                self.buf.resize(len - 4, 0);
+                self.inner.read_exact(&mut self.buf).map_err(|err| match err.kind() {
+                    io::ErrorKind::UnexpectedEof => ProtocolError::new("truncated pkt-line").into(),
+                    _ => ReadError::Io(err),
+                })?;
+                Ok(Some(Packet::Data(&self.buf)))
+            }
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ReadError {
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError),
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
+
+enum Length {
+    Special(Packet<'static>),
+    /// The whole packet's length, header included.
+    Data(usize),
+}
+
+fn parse_length(header: &[u8]) -> Result<Length, ProtocolError> {
+    let len = std::str::from_utf8(header)
+        .ok()
+        .and_then(|hex| usize::from_str_radix(hex, 16).ok())
+        .ok_or_else(|| ProtocolError::new("invalid pkt-line length"))?;
+    Ok(match len {
+        0 => Length::Special(Packet::Flush),
+        1 => Length::Special(Packet::Delim),
+        2 => Length::Special(Packet::ResponseEnd),
+        3 => return Err(ProtocolError::new("invalid pkt-line length 3")),
+        _ if len > MAX_DATA + 4 => return Err(ProtocolError::new("pkt-line is too long")),
+        _ => Length::Data(len),
+    })
 }
 
 #[cfg(test)]
@@ -120,6 +185,16 @@ mod tests {
     fn rejects_malformed_input() {
         for bad in [&b"00"[..], b"zzzz", b"0003", b"0010short", b"ffffxxxx"] {
             assert!(Reader::new(bad).next_packet().is_err(), "{:?}", String::from_utf8_lossy(bad));
+            assert!(StreamReader::new(bad).next_packet().is_err(), "{:?}", String::from_utf8_lossy(bad));
         }
+    }
+
+    #[test]
+    fn stream_reader_stops_right_after_each_packet() {
+        let mut reader = StreamReader::new(&b"0009line\n0000PACK"[..]);
+        assert_eq!(reader.next_packet().unwrap().unwrap().as_line().unwrap(), "line");
+        assert_eq!(reader.next_packet().unwrap(), Some(Packet::Flush));
+        assert_eq!(reader.into_inner(), b"PACK");
+        assert_eq!(StreamReader::new(&b""[..]).next_packet().unwrap(), None);
     }
 }

@@ -47,6 +47,12 @@ impl RepoStore {
         &self.root
     }
 
+    /// Scratch space on the same filesystem as the repositories, emptied at
+    /// startup. Pushes are quarantined here until they are checked.
+    pub fn tmp_dir(&self) -> PathBuf {
+        self.root.join(TMP_DIR)
+    }
+
     /// The on-disk location of repository `id`, whether or not it exists yet.
     pub fn path(&self, id: RepoId) -> PathBuf {
         self.root.join(Self::relative_path(id))

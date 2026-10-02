@@ -1657,6 +1657,7 @@ dependencies = [
  "gix-hashtable",
  "gix-object",
  "gix-path",
+ "gix-tempfile",
  "gix-traverse",
  "gix-zlib",
  "memmap2",

@@ -40,7 +40,7 @@ These are the baseline Klotho is built against. Each file covers one subject, an
 | [requirements/web-ui.md](requirements/web-ui.md) | `FR-UI`, `NFR-UI` | Browsing code and history, rendering, search, settings pages, the Moirai thread view and Mermaid diagrams, accessibility, i18n |
 | [requirements/collaboration.md](requirements/collaboration.md) | `FR-COLLAB` | Pull requests, review, merge strategies, issues, releases, notifications |
 | [requirements/integrations.md](requirements/integrations.md) | `FR-INT` | Webhooks, commit statuses, the Lachesis and Atropos hand-off, package registries, federation |
-| [requirements/security.md](requirements/security.md) | `NFR-SEC` | TLS and proxies, safe user content, CSP and CSRF, safe diagram rendering, abuse limits, error disclosure, SSRF, subprocess safety, secrets at rest, audit log |
+| [requirements/security.md](requirements/security.md) | `NFR-SEC` | TLS and proxies, safe user content, CSP and CSRF, safe diagram rendering, abuse limits, error disclosure, SSRF, secrets at rest, audit log |
 | [requirements/performance.md](requirements/performance.md) | `NFR-PERF` | Reference environment, git throughput, API and UI latency, streaming, memory, startup, scale, caching |
 | [requirements/operations.md](requirements/operations.md) | `NFR-OPS` | Packaging, platforms, git dependency, configuration, logging, metrics, health checks, shutdown, migrations, admin CLI |
 
@@ -70,9 +70,8 @@ Requirements that simply haven't been implemented yet are not listed as conflict
 
 ## Most important conflicts today
 
-Checked after Phase 1 (2026-10-01). Phase 0 fixed graceful shutdown, the config file and the data directory. Phase 1 fixed name casing, Windows device names, atomic creation and unregistered repositories.
+Checked after Phase 1b (2026-10-02). Phase 0 fixed graceful shutdown, the config file and the data directory. Phase 1 fixed name casing, Windows device names, atomic creation and unregistered repositories. Phase 1b replaced the `git` program with Klotho's own protocol engine, which fixed push durability and gave pushes their hook points.
 
 1. **Anyone can push, and create users and repositories.** There is no authentication or authorisation on git or the API, including the `/api/v1/admin` endpoints ([FR-ACL-001](requirements/access-control.md), [FR-AUTH-020](requirements/auth.md), [FR-REPO-001](requirements/repositories.md)). The default address is `0.0.0.0`, so that includes anyone on the network ([NFR-OPS-012](requirements/operations.md)).
-2. **Pushes have no size limit or subprocess cap** ([NFR-SEC-020](requirements/security.md), [NFR-SEC-022](requirements/security.md)).
-3. **Pushes and protocol v0/v1 fetches still run the `git` program.** Protocol v2 clone and fetch, the default since git 2.26, are served by Klotho's own engine ([ADR 0004](decisions/0004-native-git-transport.md), roadmap Phase 1b). Until pushes move over too, their durability depends on git's defaults ([NFR-STOR-001](requirements/storage.md)).
-4. **Raw file downloads are loaded fully into memory** ([NFR-PERF-013](requirements/performance.md)).
+2. **Pushes have no size limit, and pack building has no concurrency cap** ([NFR-SEC-020](requirements/security.md), [NFR-SEC-022](requirements/security.md)).
+3. **Raw file downloads are loaded fully into memory** ([NFR-PERF-013](requirements/performance.md)).

@@ -29,7 +29,7 @@
 |---|---|---|---|
 | FR-GIT-020 | Before any ref is updated, a push **must** pass through a decision point that can reject the whole push or individual refs, with a message shown to the user. This is a pre-receive step. | All four use it to enforce branch protection, quotas and archive state. | must-have |
 | FR-GIT-021 | After refs are updated, a push **must** produce one event listing every updated ref as `(ref, old id, new id)`. This is a post-receive step. | All four drive webhooks, CI and UI caches from this event. | must-have |
-| FR-GIT-022 | Atomic pushes (`git push --atomic`) **should** be honoured. | Supported by `git receive-pack`. GitHub and GitLab expose it. | should-have |
+| FR-GIT-022 | Atomic pushes (`git push --atomic`) **should** be honoured. | Part of git's push protocol. GitHub and GitLab expose it. | should-have |
 | FR-GIT-023 | Push options (`git push -o key=value`) **may** be passed to the post-receive event. | GitLab uses them, for example to create a merge request or skip CI. | nice-to-have |
 | FR-GIT-024 | Pushes to ref namespaces the server manages itself, such as `refs/pull/*`, **must** be rejected. | GitHub makes `refs/pull/*` read-only so PR heads can't be forged. | must-have |
 | FR-GIT-025 | The post-push output **may** include a link to open a pull request for a newly pushed branch. | GitHub, GitLab and Gitea print "Create a pull request" links. | nice-to-have |
@@ -43,16 +43,20 @@
 
 ## Conflicts with the current implementation
 
-Checked after Phase 1b step 1 (2026-10-02).
+Checked after Phase 1b (2026-10-02). Everything below is served by Klotho's own engine; the `git` program is no longer involved ([ADR 0004](../decisions/0004-native-git-transport.md)).
 
 | Requirement | Current behaviour | Where |
 |---|---|---|
-| FR-GIT-020, FR-GIT-021 (push hook points) | **Missing.** Pushes still go to `git receive-pack` with no pre-receive or post-receive integration, so the server can't enforce rules or learn what was pushed. The native engine's push (Phase 1b, step 3) brings both as function calls. | [git_http.rs](../../crates/server/src/git_http.rs) (`rpc`) |
-| FR-GIT-024 (protect server-managed refs) | **Not enforced.** `git receive-pack` runs without hooks, so any ref namespace can be written. It only becomes a real conflict once Klotho manages refs such as PR heads. | [git_http.rs](../../crates/server/src/git_http.rs) (`rpc`) |
+| FR-GIT-011 (partial clones) | **Missing.** Filters aren't advertised, so `--filter` clones fall back to full clones (Phase 1b, step 5). | [select.rs](../../crates/git/src/protocol/select.rs) |
+| FR-GIT-020 (pre-receive) | **Partial.** `ReceiveHooks::pre_receive` runs before any ref changes and can reject the push with a message the client prints, but only as a whole, not ref by ref. It accepts everything until Phase 2 fills it in. | [receive.rs](../../crates/git/src/protocol/receive.rs), [git_http.rs](../../crates/server/src/git_http.rs) (`PushHooks`) |
+| FR-GIT-021 (post-receive event) | **Partial.** `ReceiveHooks::post_receive` gets every applied `(ref, old, new)`, but only logs them; the event and its consumers come later. | same |
+| FR-GIT-024 (protect server-managed refs) | **Not enforced.** Any `refs/` namespace can be written. It only becomes a real conflict once Klotho manages refs such as PR heads; `pre_receive` is where the check goes. | same |
 
 Met today:
-- FR-GIT-001: clone, fetch and push over smart HTTP. Protocol v2 clone and fetch are served by Klotho's own engine (ADR 0004); pushes, v0/v1 and shallow fetches still go to the `git` program.
+- FR-GIT-001: clone, fetch and push over smart HTTP.
 - FR-GIT-004: 403 with a message for dumb HTTP.
-- FR-GIT-005: v2 natively, and v0/v1 through the fallback.
+- FR-GIT-005: protocol v2, with v0 and v1 for older clients and for every push (git has no v2 push).
 - FR-GIT-006: gzip-compressed requests.
-- FR-GIT-010: shallow clones (`--depth`, `--deepen`), through the fallback until step 4.
+- FR-GIT-010: shallow clones: `--depth`, `--deepen`, `--shallow-since`, `--shallow-exclude`, `--unshallow`, and fetching into a shallow clone.
+- FR-GIT-022: `--atomic` pushes, in one ref transaction.
+- FR-GIT-023: push options reach both hook points (unused so far).

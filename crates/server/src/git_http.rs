@@ -1,84 +1,87 @@
 //! Git's "smart HTTP" protocol, so `git clone/fetch/push http://host/<owner>/<repo>.git`
 //! work. `.git` is optional and names are case-insensitive (FR-NAME-021, 040).
 //!
-//! Interim: like `git http-backend`, this hands each request to `git upload-pack`
-//! (clone/fetch) or `git receive-pack` (push) and pipes the bodies through. The
-//! native engine of Phase 1b replaces it (ADR 0004).
+//! Everything git-specific happens in `klotho_git::protocol`, in-process with
+//! gitoxide (ADR 0004). This module only moves bytes between HTTP and that
+//! engine. The engine is blocking, so it runs on the blocking pool; fetch
+//! responses stream out as they're produced, and pushes stream in.
 //!
 //! See <https://git-scm.com/docs/http-protocol>.
 //!
 //! TODO: there is no authentication yet, so anyone who can reach the server can push.
 
-use std::path::Path as FsPath;
+use std::io::{self, BufReader, BufWriter, Write};
 use std::pin::Pin;
-use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_compression::tokio::bufread::GzipDecoder;
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use futures_util::TryStreamExt;
 use klotho_core::Core;
+use klotho_git::protocol::{self, ReceiveHooks, RefUpdate};
 use serde::Deserialize;
-use tokio::io::AsyncRead;
-use tokio::process::Command;
-use tokio_util::io::{ReaderStream, StreamReader};
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::sync::mpsc;
+use tokio_util::io::{StreamReader, SyncIoBridge};
 use tokio_util::task::TaskTracker;
 
+use crate::AppState;
 use crate::error::ApiError;
-use crate::{AppState, git_native};
+
+/// Largest fetch request body accepted. Requests carry `want`/`have` lines, a
+/// few MiB even for repositories with very many refs. Pushes have no limit here.
+const MAX_FETCH_REQUEST: u64 = 16 * 1024 * 1024;
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/{owner}/{repo}/info/refs", get(info_refs))
-        .route(
-            "/{owner}/{repo}/git-upload-pack",
-            post(|s, t, p, h, b| rpc(Service::UploadPack, s, t, p, h, b)),
-        )
-        .route(
-            "/{owner}/{repo}/git-receive-pack",
-            post(|s, t, p, h, b| rpc(Service::ReceivePack, s, t, p, h, b)),
-        )
+        .route("/{owner}/{repo}/git-upload-pack", post(upload_pack))
+        .route("/{owner}/{repo}/git-receive-pack", post(receive_pack))
         // Pushes can be arbitrarily large.
         .layer(DefaultBodyLimit::disable())
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Service {
     UploadPack,
     ReceivePack,
 }
 
 impl Service {
-    fn from_query(service: &str) -> Option<Self> {
-        match service {
-            "git-upload-pack" => Some(Self::UploadPack),
-            "git-receive-pack" => Some(Self::ReceivePack),
-            _ => None,
-        }
-    }
-
     fn name(self) -> &'static str {
         match self {
             Self::UploadPack => "upload-pack",
             Self::ReceivePack => "receive-pack",
         }
     }
+}
 
-    fn command(self, repo: &FsPath, protocol: Option<&str>, advertise_refs: bool) -> Command {
-        let mut cmd = Command::new("git");
-        cmd.arg(self.name()).arg("--stateless-rpc");
-        if advertise_refs {
-            cmd.arg("--advertise-refs");
-        }
-        cmd.arg(repo);
-        if let Some(protocol) = protocol {
-            cmd.env("GIT_PROTOCOL", protocol);
-        }
-        cmd
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Version {
+    V0,
+    V1,
+    V2,
+}
+
+/// The protocol version the client asked for in its `Git-Protocol` header
+/// (`version=2`, possibly among other `key=value` parts separated by `:`).
+fn protocol_version(headers: &HeaderMap) -> Version {
+    let Some(value) = headers.get("git-protocol").and_then(|value| value.to_str().ok()) else {
+        return Version::V0;
+    };
+    let parts: Vec<&str> = value.split(':').collect();
+    if parts.contains(&"version=2") {
+        Version::V2
+    } else if parts.contains(&"version=1") {
+        Version::V1
+    } else {
+        Version::V0
     }
 }
 
@@ -94,113 +97,166 @@ async fn info_refs(
     Query(query): Query<InfoRefsQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let Some(service) = query.service.as_deref().and_then(Service::from_query) else {
-        return Ok((StatusCode::FORBIDDEN, "only the smart HTTP protocol is supported").into_response());
+    let service = match query.service.as_deref() {
+        Some("git-upload-pack") => Service::UploadPack,
+        Some("git-receive-pack") => Service::ReceivePack,
+        _ => return Ok((StatusCode::FORBIDDEN, "only the smart HTTP protocol is supported").into_response()),
     };
-    let protocol = git_protocol(&headers);
-    if matches!(service, Service::UploadPack) && git_native::is_v2(protocol) {
-        return git_native::advertisement(&core, &owner, &repo).await;
-    }
-    let repo_path = repo_path(&core, &owner, &repo).await?;
+    let repo = core.find_repo(&owner, &repo).await?;
+    // Git has no v2 for pushing; a v2 client falls back to v0 when it gets a v0 answer.
+    let version = match (service, protocol_version(&headers)) {
+        (Service::ReceivePack, Version::V2) => Version::V0,
+        (_, version) => version,
+    };
 
-    let output = service.command(&repo_path, protocol, true).stderr(Stdio::inherit()).output().await?;
-    if !output.status.success() {
-        let message = format!("git {} --advertise-refs exited with {}", service.name(), output.status);
-        return Err(std::io::Error::other(message).into());
-    }
+    let store = core.store().clone();
+    let body = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, ApiError> {
+        let repo = store.open(repo.id)?;
+        let mut body = Vec::new();
+        if version == Version::V2 {
+            // Protocol v2 answers start directly with the capability list.
+            protocol::write_v2_advertisement(&mut body)?;
+            return Ok(body);
+        }
+        // v0/v1 over HTTP start with this service announcement.
+        protocol::pktline::write_line(&mut body, &format!("# service=git-{}", service.name()))?;
+        protocol::pktline::write_flush(&mut body)?;
+        let version_1 = version == Version::V1;
+        let written = match service {
+            Service::UploadPack => protocol::write_upload_pack_advertisement(&repo, version_1, &mut body),
+            Service::ReceivePack => protocol::write_receive_pack_advertisement(&repo, version_1, &mut body),
+        };
+        written.map_err(serve_error)?;
+        Ok(body)
+    })
+    .await??;
 
-    // Protocol v2 responses start directly with the capability list; v0/v1 need
-    // this service announcement first (matching git http-backend).
-    let mut body = Vec::new();
-    if !protocol.is_some_and(|p| p.contains("version=2")) {
-        body.extend(pkt_line(&format!("# service=git-{}\n", service.name())));
-        body.extend(b"0000");
-    }
-    body.extend(output.stdout);
-
-    Ok(git_response(&format!("application/x-git-{}-advertisement", service.name()), Body::from(body)))
+    let content_type = format!("application/x-git-{}-advertisement", service.name());
+    Ok(git_response(&content_type, Body::from(body)))
 }
 
-/// The actual fetch negotiation or push, streamed through the git process.
-async fn rpc(
-    service: Service,
+/// Clone and fetch: one negotiation round, and the pack once negotiation is done.
+async fn upload_pack(
     State(core): State<Core>,
     State(git_tasks): State<TaskTracker>,
     Path((owner, repo)): Path<(String, String)>,
     headers: HeaderMap,
     body: Body,
 ) -> Result<Response, ApiError> {
-    let expected = format!("application/x-git-{}-request", service.name());
-    if headers.get(header::CONTENT_TYPE).is_none_or(|v| v != expected.as_str()) {
+    if !has_content_type(&headers, Service::UploadPack) {
         return Ok(StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response());
     }
-    let mut input = if matches!(service, Service::UploadPack) && git_native::is_v2(git_protocol(&headers)) {
-        match git_native::upload_pack(&core, &git_tasks, &owner, &repo, &headers, body).await? {
-            git_native::UploadPack::Served(response) => return Ok(response),
-            // Already read and gunzipped, so git gets it as plain bytes.
-            git_native::UploadPack::NeedsGit(request) => {
-                Box::pin(std::io::Cursor::new(request)) as Pin<Box<dyn AsyncRead + Send>>
+    let repo = core.find_repo(&owner, &repo).await?;
+    let mut request = Vec::new();
+    request_reader(&headers, body).take(MAX_FETCH_REQUEST + 1).read_to_end(&mut request).await?;
+    if request.len() as u64 > MAX_FETCH_REQUEST {
+        return Ok(StatusCode::PAYLOAD_TOO_LARGE.into_response());
+    }
+    let v2 = protocol_version(&headers) == Version::V2;
+
+    // Packs can be gigabytes; they're never held in memory (NFR-PERF-004).
+    let (tx, rx) = mpsc::channel::<io::Result<Bytes>>(4);
+    let store = core.store().clone();
+    git_tasks.spawn_blocking(move || {
+        let interrupt = Arc::new(AtomicBool::new(false));
+        let writer = ChannelWriter { tx, interrupt: interrupt.clone() };
+        let mut out = BufWriter::with_capacity(64 * 1024, writer);
+        let result = store.open(repo.id).map_err(protocol::ServeError::from).and_then(|repo| {
+            if v2 {
+                protocol::serve_v2(&repo, &request, &mut out, &interrupt)
+            } else {
+                protocol::serve_upload_pack(&repo, &request, &mut out, &interrupt)
             }
-        }
-    } else {
-        request_reader(&headers, body)
-    };
-    let repo_path = repo_path(&core, &owner, &repo).await?;
-
-    let mut child = service
-        .command(&repo_path, git_protocol(&headers), false)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()?;
-    let mut stdin = child.stdin.take().expect("stdin is piped");
-    let stdout = child.stdout.take().expect("stdout is piped");
-
-    // Feed the request in the background while the response streams out, and
-    // close stdin when done so git knows the request is complete. Both tasks are
-    // tracked so shutdown waits for git to finish (NFR-OPS-030).
-    git_tasks.spawn(async move {
-        if let Err(err) = tokio::io::copy(&mut input, &mut stdin).await {
-            tracing::warn!(%err, "failed to forward request body to git");
-        }
-    });
-    git_tasks.spawn(async move {
-        match child.wait().await {
-            Ok(status) if !status.success() => tracing::warn!(%status, "git {} failed", service.name()),
-            Err(err) => tracing::warn!(%err, "failed to wait for git {}", service.name()),
-            Ok(_) => {}
+        });
+        let result = result.and_then(|()| out.flush().map_err(Into::into));
+        match result {
+            Ok(()) => {}
+            Err(_) if interrupt.load(Ordering::Relaxed) => {
+                tracing::debug!("client went away during upload-pack")
+            }
+            Err(err) => tracing::warn!(%err, "upload-pack failed"),
         }
     });
 
-    let content_type = format!("application/x-git-{}-result", service.name());
-    Ok(git_response(&content_type, Body::from_stream(ReaderStream::new(stdout))))
+    let stream =
+        futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|chunk| (chunk, rx)) });
+    Ok(git_response("application/x-git-upload-pack-result", Body::from_stream(stream)))
 }
 
-/// The on-disk path of `owner/repo`. The path comes from the repository's ID, so
-/// nothing from the URL ever reaches the filesystem or git's arguments.
-async fn repo_path(core: &Core, owner: &str, repo: &str) -> Result<std::path::PathBuf, ApiError> {
-    let repo = core.find_repo(owner, repo).await?;
-    Ok(core.store().path(repo.id))
+/// Push: the ref updates and the pack stream in, the report goes out once the
+/// pack is checked and the refs are updated.
+async fn receive_pack(
+    State(core): State<Core>,
+    State(git_tasks): State<TaskTracker>,
+    Path((owner, repo)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<Response, ApiError> {
+    if !has_content_type(&headers, Service::ReceivePack) {
+        return Ok(StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response());
+    }
+    let repo = core.find_repo(&owner, &repo).await?;
+    let mut input = BufReader::with_capacity(64 * 1024, SyncIoBridge::new(request_reader(&headers, body)));
+    let store = core.store().clone();
+    let report = git_tasks
+        .spawn_blocking(move || -> Result<Vec<u8>, ApiError> {
+            let git_repo = store.open(repo.id)?;
+            let mut out = Vec::new();
+            let interrupt = AtomicBool::new(false);
+            protocol::serve_receive_pack(
+                &git_repo,
+                &store.tmp_dir(),
+                &mut input,
+                &mut out,
+                &interrupt,
+                &PushHooks,
+            )
+            .map_err(serve_error)?;
+            Ok(out)
+        })
+        .await??;
+    Ok(git_response("application/x-git-receive-pack-result", Body::from(report)))
 }
 
-/// The client's `Git-Protocol` header, passed to git as `GIT_PROTOCOL` so protocol
-/// v2 works. Only forwarded if it looks like `version=2`-style key/values.
-fn git_protocol(headers: &HeaderMap) -> Option<&str> {
-    let value = headers.get("git-protocol")?.to_str().ok()?;
-    let safe =
-        value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'=' | b':' | b'.' | b'-' | b'_'));
-    safe.then_some(value)
+/// Klotho's checks around a push. Phase 2 adds authorization to `pre_receive`;
+/// `post_receive` is where webhooks and other events will start.
+struct PushHooks;
+
+impl ReceiveHooks for PushHooks {
+    fn pre_receive(&self, _updates: &[RefUpdate], _push_options: &[String]) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn post_receive(&self, updates: &[RefUpdate], _push_options: &[String]) {
+        for update in updates {
+            tracing::debug!(name = %update.name, old = %update.old, new = %update.new, "ref updated by push");
+        }
+    }
+}
+
+fn has_content_type(headers: &HeaderMap, service: Service) -> bool {
+    let expected = format!("application/x-git-{}-request", service.name());
+    headers.get(header::CONTENT_TYPE).is_some_and(|value| value == expected.as_str())
+}
+
+fn serve_error(err: protocol::ServeError) -> ApiError {
+    match err {
+        protocol::ServeError::Io(err) => err.into(),
+        protocol::ServeError::Git(err) => klotho_core::Error::from(err).into(),
+        // The engine answers protocol errors in-band; this is only a fallback.
+        protocol::ServeError::Protocol(err) => io::Error::other(err.to_string()).into(),
+    }
 }
 
 /// The request body as a reader, gunzipped if the client compressed it (git
 /// gzips large fetch requests, FR-GIT-006).
-pub(crate) fn request_reader(headers: &HeaderMap, body: Body) -> Pin<Box<dyn AsyncRead + Send>> {
-    let reader = StreamReader::new(body.into_data_stream().map_err(std::io::Error::other));
+fn request_reader(headers: &HeaderMap, body: Body) -> Pin<Box<dyn AsyncRead + Send>> {
+    let reader = StreamReader::new(body.into_data_stream().map_err(io::Error::other));
     let gzipped = headers.get(header::CONTENT_ENCODING).is_some_and(|v| v == "gzip");
     if gzipped { Box::pin(GzipDecoder::new(reader)) } else { Box::pin(reader) }
 }
 
-pub(crate) fn git_response(content_type: &str, body: Body) -> Response {
+fn git_response(content_type: &str, body: Body) -> Response {
     (
         [
             (header::CONTENT_TYPE, content_type),
@@ -211,17 +267,45 @@ pub(crate) fn git_response(content_type: &str, body: Body) -> Response {
         .into_response()
 }
 
-/// Encodes one pkt-line: a 4-hex-digit length (including itself) then the data.
-fn pkt_line(data: &str) -> Vec<u8> {
-    format!("{:04x}{data}", data.len() + 4).into_bytes()
+/// Hands written bytes to the async response body. When the client goes away
+/// the channel closes, writes fail, and `interrupt` stops pack generation.
+struct ChannelWriter {
+    tx: mpsc::Sender<io::Result<Bytes>>,
+    interrupt: Arc<AtomicBool>,
+}
+
+impl Write for ChannelWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.tx.blocking_send(Ok(Bytes::copy_from_slice(buf))).is_err() {
+            self.interrupt.store(true, Ordering::Relaxed);
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "client went away"));
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use axum::http::HeaderValue;
+
     use super::*;
 
     #[test]
-    fn pkt_line_includes_its_own_length() {
-        assert_eq!(pkt_line("# service=git-upload-pack\n"), b"001e# service=git-upload-pack\n");
+    fn detects_the_protocol_version() {
+        let version = |value: Option<&str>| {
+            let mut headers = HeaderMap::new();
+            if let Some(value) = value {
+                headers.insert("git-protocol", HeaderValue::from_str(value).unwrap());
+            }
+            protocol_version(&headers)
+        };
+        assert!(version(Some("version=2")) == Version::V2);
+        assert!(version(Some("object-format=sha1:version=2")) == Version::V2);
+        assert!(version(Some("version=1")) == Version::V1);
+        assert!(version(None) == Version::V0);
     }
 }

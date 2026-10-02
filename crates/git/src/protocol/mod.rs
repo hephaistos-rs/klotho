@@ -1,17 +1,35 @@
-//! Klotho's own implementation of the server side of the git protocol, so no
-//! `git` program is needed (ADR 0004). It has no HTTP or SSH in it: callers
-//! hand it a repository and the request bytes, and it writes the response.
+//! Klotho's own implementation of the server side of the git protocol, built
+//! on gitoxide (ADR 0004). gitoxide reads and writes repositories, walks
+//! history and builds and indexes packs; this module speaks the wire protocol
+//! around that, which gitoxide only implements for clients.
 //!
-//! Built so far (Phase 1b, step 1): protocol v2 `ls-refs` and `fetch`, without
-//! shallow clones or filters. Pushes and protocol v0/v1 still go to the `git`
-//! program in `klotho-server`.
+//! It has no HTTP or SSH in it: callers hand it a repository and the request
+//! bytes, and it writes the response.
+//!
+//! - Fetch and clone: protocol v2 ([`serve_v2`]) and v0/v1 ([`serve_upload_pack`]),
+//!   including shallow fetches. Partial clone filters aren't supported.
+//! - Push: [`serve_receive_pack`] (git has no v2 push).
 
+mod fetch;
 mod pack;
 pub mod pktline;
+mod receive;
+mod refs;
+mod select;
 mod sideband;
+mod v0;
 mod v2;
 
-pub use v2::{needs_git_program, serve as serve_v2, write_advertisement as write_v2_advertisement};
+use std::io::Write;
+
+pub use receive::{ReceiveHooks, RefUpdate, serve_receive_pack, write_receive_pack_advertisement};
+pub use v0::{serve_upload_pack, write_upload_pack_advertisement};
+pub use v2::{serve as serve_v2, write_advertisement as write_v2_advertisement};
+
+/// Most `want`, `have` or ref update lines a single request may carry. Git sends
+/// haves in rounds of at most a few hundred, and wants are bounded by the
+/// number of refs.
+const MAX_LINES: usize = 100_000;
 
 /// Something wrong with what the client sent. Its message goes back to the
 /// client, so it must never contain server details.
@@ -34,4 +52,11 @@ pub enum ServeError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Git(#[from] crate::Error),
+}
+
+/// Answers with an `ERR` line, which the client prints as "remote error".
+fn answer_error(out: &mut dyn Write, err: ProtocolError) -> Result<(), ServeError> {
+    pktline::write_line(out, &format!("ERR {err}"))?;
+    pktline::write_flush(out)?;
+    Ok(())
 }

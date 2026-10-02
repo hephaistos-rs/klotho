@@ -28,14 +28,14 @@
 |---|---|---|---|
 | NFR-SEC-020 | Request bodies **must** have configurable size limits: small for JSON API requests (default 1 MiB), larger for git pushes (default 2 GiB) and LFS uploads. Requests over the limit **must** be rejected with `413`. | GitLab (max push size) and Gitea (`LFS_MAX_FILE_SIZE`). Without limits, one request can fill the disk. | should-have |
 | NFR-SEC-021 | The API and git endpoints **should** be rate-limited per user and per source IP, with configurable limits. Limited responses **should** return `429` with `Retry-After`. | GitHub (5000 req/h authenticated) and GitLab rate limits. Protects capacity from runaway scripts. | should-have |
-| NFR-SEC-022 | The number of concurrent git subprocesses **must** be capped, and extra requests queued or rejected rather than started. | GitLab/Gitaly concurrency limits. Each clone of a large repository can use a lot of CPU and memory. | must-have |
-| NFR-SEC-023 | Git subprocesses **should** have a configurable wall-clock timeout, and **must** be killed if the client disconnects. | Gitea times out git operations. Leftover `upload-pack` processes pile up and use resources for nothing. | should-have |
+| NFR-SEC-022 | The number of packs built or indexed at once **must** be capped, and extra git requests queued or rejected rather than started. | GitLab/Gitaly concurrency limits. Each clone of a large repository can use a lot of CPU and memory. Reworded 2026-10-02 ([ADR 0004](../decisions/0004-native-git-transport.md)): it used to cap git subprocesses. | must-have |
+| NFR-SEC-023 | Git requests **should** have a configurable wall-clock timeout, and their work **must** stop if the client disconnects. | Gitea times out git operations. Work for a client that's gone uses resources for nothing. Reworded 2026-10-02: it used to be about killing subprocesses. | should-have |
 
 ## Error disclosure
 
 | ID | Requirement | Rationale | Priority |
 |---|---|---|---|
-| NFR-SEC-030 | Error responses **must not** reveal internal details: no file paths, stack traces, SQL, or subprocess output unrelated to the user's request. | Standard. | must-have |
+| NFR-SEC-030 | Error responses **must not** reveal internal details: no file paths, stack traces, SQL, or internal error text unrelated to the user's request. | Standard. | must-have |
 
 ## Outbound requests
 
@@ -43,12 +43,12 @@
 |---|---|---|---|
 | NFR-SEC-031 | Server-side requests to user-supplied URLs (webhooks, mirrors, imports, OIDC discovery) **must** refuse loopback, link-local, private and metadata addresses by default, checking the address after DNS resolution and after every redirect. Administrators **may** allowlist hosts. | Gitea `ALLOWED_HOST_LIST` and GitLab's "Allow requests to the local network" (off by default). Prevents SSRF against internal services. | must-have |
 
-## Subprocesses and secrets
+## Secrets
 
 | ID | Requirement | Rationale | Priority |
 |---|---|---|---|
-| NFR-SEC-040 | Subprocesses **must** be started without a shell, with every user-influenced value passed as a separate argument that can't be read as an option. | Several CVEs in git frontends came from argument injection, e.g. `--upload-pack=` smuggled in as a repository name. | must-have |
-| NFR-SEC-041 | Git subprocesses **should** get a minimal environment built from an allowlist (`PATH`, `HOME`, `GIT_PROTOCOL`, …), not the server's full environment. | Gitea builds a fixed environment for git commands. Server secrets in environment variables shouldn't leak into hooks or error output. | should-have |
+| ~~NFR-SEC-040~~ | **Withdrawn 2026-10-02** ([ADR 0004](../decisions/0004-native-git-transport.md)): Klotho starts no subprocesses. It said: start subprocesses without a shell, with user-influenced values as separate arguments that can't be read as options. | | — |
+| ~~NFR-SEC-041~~ | **Withdrawn 2026-10-02**, for the same reason. It said: give git subprocesses a minimal environment built from an allowlist. | | — |
 | NFR-SEC-042 | Secrets that Klotho has to be able to read back later, such as webhook secrets, mirror credentials and OAuth client secrets, **must** be encrypted at rest with a key kept outside the database. | GitLab encrypts these with `db_key_base`, Gitea with `SECRET_KEY`. A database dump then doesn't expose third-party credentials. | must-have |
 
 ## Audit and process
@@ -66,7 +66,7 @@ Checked against commit `6b4895f`.
 |---|---|---|
 | NFR-SEC-010 (safe raw content) | **Partial.** Raw blobs are served as `application/octet-stream`, which is the right idea, but without `X-Content-Type-Options: nosniff`. | [api.rs:102-111](../../crates/server/src/api.rs#L102-L111) |
 | NFR-SEC-020 (body size limits) | **Partial.** `/api` has a configurable limit (default 1 MiB, `413` above it). The body limit is still turned off for git routes with no replacement, so a single push can be as large as the disk allows. | [git_http.rs](../../crates/server/src/git_http.rs) (`router`) |
-| NFR-SEC-022, NFR-SEC-023 (subprocess caps and cleanup) | **Conflict.** Each git request spawns a `git` process with no concurrency cap and no timeout. The child isn't created with `kill_on_drop`, so a client that disconnects mid-clone leaves the process running until git notices the broken pipe. | [git_http.rs:120-165](../../crates/server/src/git_http.rs#L120-L165) |
-| NFR-SEC-041 (minimal git environment) | **Conflict.** `git` inherits the server's entire environment. Only `GIT_PROTOCOL` is set explicitly, though it is correctly allowlisted. | [git_http.rs:62-73](../../crates/server/src/git_http.rs#L62-L73) |
+| NFR-SEC-022 (cap on concurrent packs) | **Conflict.** Every clone, fetch and push runs on the blocking pool with no limit of its own (Phase 4 adds the semaphore). | [git_http.rs](../../crates/server/src/git_http.rs) (`upload_pack`, `receive_pack`) |
+| NFR-SEC-023 (timeouts, stop on disconnect) | **Partial.** A fetch stops building its pack as soon as a write to the gone client fails, and a push cut off mid-pack fails while indexing and leaves nothing behind. There's no wall-clock timeout on git requests yet. | [git_http.rs](../../crates/server/src/git_http.rs) (`ChannelWriter`) |
 
-Met today: NFR-SEC-030 (500 responses say only "internal server error" and the details are logged; [error.rs:28-36](../../crates/server/src/error.rs#L28-L36)) and NFR-SEC-040 (git is called with separate arguments and an absolute path that starts with no `-`).
+Met today: NFR-SEC-030 (500 responses say only "internal server error" and the details are logged; [error.rs:28-36](../../crates/server/src/error.rs#L28-L36)). Since Phase 1b (2026-10-02) Klotho starts no subprocesses, so the old subprocess rules (NFR-SEC-040, 041) are withdrawn.

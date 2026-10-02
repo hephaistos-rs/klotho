@@ -59,3 +59,15 @@ impl From<std::io::Error> for ApiError {
         Self::internal(&err)
     }
 }
+
+impl From<klotho_git::Error> for ApiError {
+    fn from(err: klotho_git::Error) -> Self {
+        Error::from(err).into()
+    }
+}
+
+impl From<tokio::task::JoinError> for ApiError {
+    fn from(err: tokio::task::JoinError) -> Self {
+        Error::from(err).into()
+    }
+}

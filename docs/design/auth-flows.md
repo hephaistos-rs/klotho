@@ -173,7 +173,7 @@ sequenceDiagram
 
 1. `russh` server, public-key auth only. Look the offered key's SHA-256 fingerprint up in `ssh_keys`; the result is a user key or a deploy key.
 2. Accept only `exec` requests. Parse the command strictly: exactly `git-upload-pack '<path>'` or `git-receive-pack '<path>'` (also `git-upload-archive`). Resolve `<path>` as a repository name the same way HTTP does, then run the same `authorize()` call (FR-ACL-050).
-3. Spawn `git upload-pack <absolute repo path>` with no shell (NFR-SEC-040), and forward the `GIT_PROTOCOL` environment variable if the client sent it (protocol v2).
+3. Hand the channel to Klotho's protocol engine (`klotho_git::protocol`, [ADR 0004](../decisions/0004-native-git-transport.md)) in its stateful mode, with the protocol version from the client's `GIT_PROTOCOL` environment request (protocol v2). No process is started.
 4. Reject shell, PTY and port-forwarding requests with a friendly message: "Hi <user>! You've authenticated, but Klotho doesn't provide shell access."
 
 ## Personal access tokens

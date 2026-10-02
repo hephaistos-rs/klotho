@@ -64,7 +64,7 @@ It covers:
 
 ### Until the engine is ready
 
-The current subprocess transport (`crates/server/src/git_http.rs`) and the startup git version check stay, **unchanged and isolated**, until the native engine passes the end-to-end test suite. The PR that switches to the native engine deletes both. That keeps Klotho usable while the engine is built, with a clear end state.
+*Done 2026-10-02; see the update at the end.* The current subprocess transport (`crates/server/src/git_http.rs`) and the startup git version check stay, **unchanged and isolated**, until the native engine passes the end-to-end test suite. The PR that switches to the native engine deletes both. That keeps Klotho usable while the engine is built, with a clear end state.
 
 ### Testing
 
@@ -102,5 +102,12 @@ The current subprocess transport (`crates/server/src/git_http.rs`) and the start
 **Updated 2026-10-02, after step 1 (v2 fetch).**
 - pkt-lines are a small module of our own, not `gix-packetline`. The encoding is trivial, and owning it means our own limits on untrusted input.
 - Pack writing is behind `gix-pack`'s `generate` feature, which `gix` doesn't enable. `klotho-git` depends on `gix-pack` at the exact version `gix` uses, so Cargo turns the feature on for that same crate. Keep the two in step on every gix upgrade.
+
+**Updated 2026-10-02, switch-over.** The engine serves everything: v2 and v0/v1 fetch, shallow fetches, and push. The subprocess transport, the startup git version check and `GitVersion` are deleted, and the requirement changes above are applied. Where the build differs from this ADR:
+- **The push quarantine is under the store's `.tmp/`**, not inside the repository. It's on the same filesystem, so the checked pack is still moved with a rename, and `.tmp/` is already emptied at startup, which cleans up after a crash.
+- **Pre-receive and post-receive are one trait**, `protocol::ReceiveHooks`, not a per-ref `check_ref_update()`. Pre-receive rejects the whole push for now; per-ref rejection comes with branch protection.
+- **Fetch packs are never thin.** `gix-pack` can't restrict thin-pack bases to objects the client is known to have, and a wrong base breaks shallow clones. Received thin packs are fine. This adds to the performance risk above.
+- **Pack indexing needs `gix-pack`'s `streaming-input` feature**, enabled the same way as `generate`.
+- Still open: partial clone filters, the cap on concurrent packs, size limits on pushes, fuzz targets, and the NFR-PERF-001 measurement.
 
 **Revisit if:** the engine can't reach the NFR-PERF-001 target after our own repack exists, or gitoxide gains a maintained server side we could adopt instead.

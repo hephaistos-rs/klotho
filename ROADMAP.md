@@ -186,7 +186,7 @@ Phases run in order: 0, 1, 1b, 2 and onwards. Phase 1b (the native git transport
 - ~~`klotho.dev.toml` with `data_dir = "testRepos"`.~~ `.cargo/config.toml` now sets only `KLOTHO_CONFIG`, so `cargo run` uses it.
 - ~~CLI with `clap`: `klotho [serve]` (the default) and an empty `klotho admin`.~~
 - ~~Graceful shutdown: on Ctrl-C or SIGTERM, stop accepting connections and wait up to `server.shutdown_grace_secs` for running requests and git tasks (a `TaskTracker`).~~
-- ~~A git version check at startup (≥ 2.39).~~ Interim: it goes away with the subprocess transport ([ADR 0004](docs/decisions/0004-native-git-transport.md)).
+- ~~A git version check at startup (≥ 2.39).~~ Removed in Phase 1b: Klotho no longer runs `git` at all ([ADR 0004](docs/decisions/0004-native-git-transport.md)).
 - ~~`tower-http` layers: tracing (path only, never the query string), request IDs (an incoming `X-Request-Id` is kept), a timeout on everything except git transport, a body limit on `/api`. Unknown `/api` paths get a JSON 404.~~
 - ~~`/-/health`.~~
 - ~~CI (GitHub Actions): `cargo fmt --check`, `clippy -D warnings` and `cargo test` on Linux and Windows; `cargo deny check`; `cargo xtask dist`.~~
@@ -244,25 +244,26 @@ Phases run in order: 0, 1, 1b, 2 and onwards. Phase 1b (the native git transport
 **Goal:** Klotho serves clone, fetch and push itself, with gitoxide, and never runs the `git` program ([ADR 0004](docs/decisions/0004-native-git-transport.md)). It comes after Phase 1 so it's built on ID-based storage, and before Phase 2 so authentication and pre-receive checks plug into our own code instead of a subprocess.
 
 - A `protocol` module in `klotho-git` that takes a repository and a byte stream in each direction, with no HTTP or SSH in it. `klotho-server` drives it statelessly (HTTP) and `klotho-ssh` statefully (Phase 4).
-- ~~**Step 1: protocol v2 fetch.**~~ Done (2026-10-02). `klotho_git::protocol`: the capability advertisement, `ls-refs` (`ref-prefix`, `symrefs`, `peel`, `unborn`) and `fetch` (want/have negotiation, `done`, `thin-pack`, `include-tag`, `no-progress`, `side-band-64k`). `klotho-server`'s `git_native.rs` serves it for requests with `Git-Protocol: version=2`, streaming the pack from the blocking pool. Tests: `crates/server/tests/native_fetch.rs`. Not done yet: the semaphore on concurrent packs (Phase 4).
-- **Step 2: v0/v1 fetch** for older clients: the ref advertisement with capabilities, `multi_ack_detailed`, `no-done`, `thin-pack`, `ofs-delta`, `include-tag`.
-- **Step 3: push** (`receive-pack`, v0/v1 only, because git has no v2 push): commands, quarantine directory, indexing the (thin) pack with `gix-pack`, connectivity and object checks, `report-status`, `atomic`, `push-options`, and a `gix-ref` transaction. Leave a pre-receive and a post-receive function in place, both empty for now. Phase 2 fills in pre-receive.
-- **Step 4: shallow** (`deepen`, `deepen-since`, `deepen-not`, `deepen-relative`). FR-GIT-010 is must-have, because CI clones are shallow. Until then the engine advertises `fetch=shallow` (as `git upload-pack` does), and `protocol::needs_git_program` sends any fetch with `shallow`/`deepen` lines to the `git` program. `ls-refs` and ordinary fetches stay native. Without that, step 1 broke `git clone --depth 1` ("Server does not support shallow requests"); `shallow_clones_keep_working` guards it.
-- **Step 5: partial clone filters** (`blob:none`, `blob:limit`, `tree:0`).
-- **Switch over:** route the git HTTP paths to the engine, then delete the subprocess code in `git_http.rs`, the startup git version check and `GitVersion`, and apply ADR 0004's requirement changes.
+- ~~**Step 1: protocol v2 fetch.**~~ Done (2026-10-02). `klotho_git::protocol`: the capability advertisement, `ls-refs` (`ref-prefix`, `symrefs`, `peel`, `unborn`) and `fetch` (want/have negotiation, `done`, `include-tag`, `no-progress`, `side-band-64k`), streamed from the blocking pool. Not done yet: the semaphore on concurrent packs (Phase 4).
+- ~~**Step 2: v0/v1 fetch**~~ Done (2026-10-02). `protocol/v0.rs`: the ref advertisement (with `symref=`, peeled tags and `version 1` for v1), stateless `multi_ack_detailed` and `no-done` negotiation, `side-band-64k` or a raw pack.
+- ~~**Step 3: push**~~ Done (2026-10-02). `protocol/receive.rs`: commands, `report-status`, `side-band-64k`, `atomic`, `push-options`, `delete-refs`. The pack (thin packs completed from the repository) is indexed by `gix-pack` into a quarantine under the store's `.tmp/`, every object in it is decoded and checked to have what it points at, then the pack is fsynced and moved into `objects/pack` and the refs are updated with `gix-ref` (one transaction for `--atomic`, one per ref otherwise) and fsynced. Branches must point at commits, and the branch HEAD points at can't be deleted. `ReceiveHooks::pre_receive` and `post_receive` are in place and empty; Phase 2 fills in pre-receive.
+- ~~**Step 4: shallow**~~ Done (2026-10-02). `protocol/select.rs`: `deepen`, `deepen-relative`, `deepen-since`, `deepen-not` and `--unshallow`, for v0, v1 and v2, plus fetching into a shallow clone.
+- **Step 5: partial clone filters** (`blob:none`, `blob:limit`, `tree:0`). Not advertised, so clients fall back to full clones; a `--filter` request gets a clear error.
+- ~~**Switch over.**~~ Done (2026-10-02). `git_http.rs` only moves bytes between HTTP and the engine; the subprocess code, `git_native.rs`, the startup git version check and `GitVersion` are deleted, and ADR 0004's requirement changes are applied.
+- Tests: `crates/server/tests/native_fetch.rs` (clone and fetch over v0/v1/v2, every shallow mode, refusing unadvertised objects) and `native_push.rs` (push, thin push, force push, deletes, tags, v1, push options, `--atomic` with one ref rejected, a pack missing objects, a push cut off mid-pack).
 
 **Requirements:** FR-GIT-001, 004–006, 010, 011, 020, 021 (hook points only), 022, 023; NFR-PERF-001–004; NFR-STOR-001, 002.
 
-**New packages:** `gix-pack` with its `generate` feature, pinned to the exact version `gix` uses (gix doesn't enable pack writing itself); `cargo-fuzz` as a tool. pkt-lines are our own small module instead of `gix-packetline`: about 60 lines, with our own limits on untrusted input, and none of the client-side feature flags.
+**New packages:** `gix-pack` with its `generate` (pack writing) and `streaming-input` (pack indexing) features, pinned to the exact version `gix` uses, since gix enables neither; `cargo-fuzz` as a tool. pkt-lines are our own small module instead of `gix-packetline`, with our own limits on untrusted input and none of the client-side feature flags.
 
 **Done when:**
-- [ ] The end-to-end suite (real `git` client against the real binary, Linux and Windows) passes for: clone, fetch, push, force push, delete a branch, push tags, `--atomic` with one ref rejected, `--depth 1`, `--shallow-since`, `--filter=blob:none`, and protocol v0, v1 and v2 (`-c protocol.version=N`).
-- [ ] A push of 2 GiB doesn't grow server memory (NFR-PERF-004).
-- [ ] Killing the client mid-push leaves no new refs and no files outside the quarantine. The quarantine is cleaned up.
-- [ ] A pushed pack missing an object the new ref needs is rejected, and the client prints our message.
+- [ ] The end-to-end suite (real `git` client against the server, Linux and Windows) passes for: clone, fetch, push, force push, delete a branch, push tags, `--atomic` with one ref rejected, `--depth 1`, `--shallow-since`, `--filter=blob:none`, and protocol v0, v1 and v2 (`-c protocol.version=N`). *Everything except `--filter` (step 5) passes on Windows; Linux runs in CI.*
+- [ ] A push of 2 GiB doesn't grow server memory (NFR-PERF-004). *The pack streams from the request into `gix-pack`'s indexer, but this hasn't been measured.*
+- [x] Killing the client mid-push leaves no new refs and no files outside the quarantine. The quarantine is cleaned up. (`an_interrupted_push_leaves_nothing_behind`)
+- [x] A pushed pack missing an object the new ref needs is rejected, and the client prints our message. (`a_pack_missing_objects_is_rejected_and_never_stored`)
 - [ ] Fuzz targets for the pkt-line reader and both command parsers run in CI for a fixed time without findings.
 - [ ] Clone time of the reference large repository is recorded against `git http-backend` (NFR-PERF-001). It doesn't have to meet 110% yet, but it has to be measured.
-- [ ] No `std::process::Command` and no `tokio::process` remain outside tests.
+- [x] No `std::process::Command` and no `tokio::process` remain outside tests. (`xtask` still runs `cargo`, `topcoat` and `sqlx` as a build tool; nothing in the shipped binary starts a process.)
 
 > **Guide notes.**
 > - **Learned in step 1:**
@@ -271,6 +272,13 @@ Phases run in order: 0, 1, 1b, 2 and onwards. Phase 1b (the native git transport
 >   - gix's `Reference::peel_to_id` peels **in place**, so read a ref's direct target before peeling it.
 >   - `git` sends `no-progress` when stderr isn't a terminal. Tests that look for the engine's progress line pass `--progress`.
 >   - Negotiation answers `ready` as soon as one have is common. The pack is always correct, because nothing reachable from a common commit is sent, but it may repeat objects the client has through other common commits. A smarter cut point (git's `ok_to_give_up`) is an optimisation for later.
+> - **Learned in steps 2–4:**
+>   - **Packs are never thin.** gix's `allow_thin_pack` keeps every delta whose base isn't in the pack, assuming the client has the base. Shallow clients and clients missing a branch don't, and `git clone --depth 1` failed with "unresolved deltas" once pushes started storing packs. Such deltas are now sent as whole objects. Thin packs come back when we can restrict bases to objects in the common commits' trees.
+>   - A commit at a shallow boundary needs its **whole tree** (`ObjectExpansion::TreeContents`): `TreeAdditionsComparedToAncestor` diffs against parents the client won't get, and also adds those parent commit objects to the pack, which makes the client's `fsck` complain.
+>   - In stateless v0/v1, the shallow list goes out with **every** round and the client keeps the first one, so the boundary must not depend on the haves.
+>   - A push whose objects the server already has (a new branch at an existing commit) carries an **empty pack**. gix writes no files for it.
+>   - On Windows, `File::sync_all` needs a handle opened for writing.
+>   - Recording real traffic first (`GIT_TRACE_PACKET` against the old `git upload-pack`/`receive-pack` transport, before deleting it) settled the questions the protocol docs left open.
 > - **Read git's protocol docs as the spec:** `gitprotocol-pack`, `gitprotocol-v2`, `gitprotocol-capabilities`, `gitprotocol-http`. When behaviour is unclear, check what `git upload-pack` does with `GIT_TRACE_PACKET=1` on the client.
 > - **Stateless HTTP negotiation** is the subtle part of v0/v1: each POST repeats all `have`s, and the server must answer as if the conversation had continued. Protocol v2 was designed around this, which is one reason to build v2 first.
 > - **gitoxide's client is your test partner too.** Fetching from our server with `gix` in unit tests gives fast tests that don't need the `git` program, alongside the end-to-end tests that do.
@@ -532,14 +540,14 @@ This is the biggest phase. Split it into three releases and ship each one before
 
 **Goal:** an admin can run Klotho for years: observe it, keep it healthy, bound its growth and upgrade it safely.
 
-- **Metrics** (NFR-OPS-021): `/-/metrics` behind a metrics token. Request counts and latency by **route template** (`MatchedPath`), git operations by type and result, running subprocesses and queue depth, job queue depth, storage usage per root.
+- **Metrics** (NFR-OPS-021): `/-/metrics` behind a metrics token. Request counts and latency by **route template** (`MatchedPath`), git operations by type and result, packs being built and queued, job queue depth, storage usage per root.
 - **JSON logs** (NFR-OPS-020): the `json` feature of `tracing-subscriber`, chosen in config. The request ID from P0 is in every line.
 - **Housekeeping** (FR-STOR-031): a job per repository on a schedule and after N pushes. gitoxide has no repack or gc, so this is ours: consolidate packs and loose objects into one pack with `gix-pack`'s output pipeline (with delta search, which `gix-pack` lacks today, so this is also where NFR-PERF-001 gets its fix), drop unreachable objects past a grace period, write a commit-graph (with changed-path Bloom filters, which make path-filtered history fast; NFR-PERF-014), and pack refs.
 - **Integrity checks** (FR-STOR-030): scheduled jobs that check connectivity from every ref and that every object decodes. Failures go to the admin dashboard and the log.
 - **Quotas** (FR-STOR-050): per owner and per repository, counting git data plus LFS. Pre-receive estimates the push from the size of the quarantine directory and rejects it with the quota and current usage.
 - **Git LFS** (FR-GIT-030): the batch API and basic transfer. Objects are stored in `FileStore` at `lfs/<oid[0:2]>/<oid[2:4]>/<oid>`. Uploads are hashed while streaming and rejected on mismatch. Downloads use presigned URLs on S3. Each repository is linked to its objects through `lfs_objects(repo_id, oid)`, and forks copy the links.
 - **LFS over SSH:** implement the `git-lfs-authenticate` command in the SSH server, which returns an HTTPS `href` and a short-lived token.
-- **Container image** (NFR-OPS-004): a slim base with `git` ≥ 2.39, running as a non-root user, with one volume `/data` (= `data_dir`) and a `HEALTHCHECK` on `/-/health`. Plus an example **systemd unit** with `ProtectSystem=strict`, `ReadWritePaths=<data_dir>` and `NoNewPrivileges=yes`.
+- **Container image** (NFR-OPS-004): a slim base with just the binary (no `git` needed), running as a non-root user, with one volume `/data` (= `data_dir`) and a `HEALTHCHECK` on `/-/health`. Plus an example **systemd unit** with `ProtectSystem=strict`, `ReadWritePaths=<data_dir>` and `NoNewPrivileges=yes`.
 - **PostgreSQL** (FR-STOR-002): the `postgres` feature of sqlx, its own migrations directory, and a `Db` trait in `klotho-core` with one implementation per database, both using checked `query!` macros. CI runs the whole test suite against both. `klotho admin migrate-db --to postgres://…` copies an existing SQLite install.
 - **Upgrade test** (NFR-OPS-031, 032): CI starts the previous release on a fixture data directory, then the new binary on the same directory, and checks that everything still works.
 

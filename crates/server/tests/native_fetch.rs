@@ -1,12 +1,12 @@
-//! Clone and fetch served by Klotho's own protocol v2 engine (ADR 0004), checked
-//! with the real `git` client. Pushes still go through the `git` program here.
+//! Clone and fetch served by Klotho's own protocol engine (ADR 0004), checked
+//! with the real `git` client for every protocol version it speaks.
 
 mod common;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use common::{blocking, git, git_output};
+use common::{blocking, git, git_output, git_output_env};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// The engine sends this progress line on every pack, so seeing it in the
@@ -50,7 +50,7 @@ fn refs(dir: &Path, pattern: &str) -> String {
     git(dir, &["for-each-ref", "--format=%(refname:lstrip=2) %(objectname)", pattern])
 }
 
-/// Pushes every branch and tag of `source` to `url` (still through the `git` program).
+/// Pushes every branch and tag of `source` to `url`.
 fn push_all(source: &Path, url: &str) {
     git(source, &["push", "-q", url, "refs/heads/*:refs/heads/*", "refs/tags/*:refs/tags/*"]);
 }
@@ -138,8 +138,10 @@ async fn an_empty_repository_clones() {
     .await;
 }
 
+/// Clone, then an incremental fetch with tags, over protocol versions 0 and 1.
+/// Version 2 is covered by `clone_fetch_and_tags_through_the_native_engine`.
 #[tokio::test(flavor = "multi_thread")]
-async fn protocol_v0_still_works_through_the_fallback() {
+async fn protocol_v0_and_v1_clone_and_fetch() {
     let running = common::start(Duration::from_secs(5)).await;
     let url = running.url("/alice/demo.git");
     let work = tempfile::tempdir().unwrap();
@@ -147,10 +149,29 @@ async fn protocol_v0_still_works_through_the_fallback() {
     blocking(move || {
         let source = rich_history(&work);
         push_all(&source, &url);
-        let (_, stderr) =
-            git_output(&work, &["-c", "protocol.version=0", "clone", "--progress", &url, "old"]);
-        assert!(!stderr.contains(NATIVE_MARKER), "{stderr}");
-        git(&work.join("old"), &["fsck", "--full"]);
+        for version in ["0", "1"] {
+            let protocol = format!("protocol.version={version}");
+            let name = format!("v{version}");
+            let (_, stderr) = git_output(&work, &["-c", &protocol, "clone", "--progress", &url, &name]);
+            assert!(stderr.contains(NATIVE_MARKER), "v{version}:\n{stderr}");
+            let clone = work.join(&name);
+            git(&clone, &["fsck", "--full", "--strict"]);
+            assert_eq!(refs(&clone, "refs/remotes/origin/"), refs_as_remote(&source));
+            assert_eq!(refs(&clone, "refs/tags/"), refs(&source, "refs/tags/"));
+        }
+
+        std::fs::write(source.join("file0.txt"), "later\n").unwrap();
+        git(&source, &["commit", "-q", "-a", "-m", "later"]);
+        git(&source, &["tag", "-a", "v3.0", "-m", "release 3.0"]);
+        push_all(&source, &url);
+        for version in ["0", "1"] {
+            let clone = work.join(format!("v{version}"));
+            let protocol = format!("protocol.version={version}");
+            git(&clone, &["-c", &protocol, "fetch", "-q", "--tags", "origin"]);
+            git(&clone, &["fsck", "--full", "--strict"]);
+            assert_eq!(refs(&clone, "refs/remotes/origin/"), refs_as_remote(&source));
+            assert_eq!(git(&clone, &["cat-file", "-t", "v3.0"]).trim(), "tag");
+        }
     })
     .await;
 }
@@ -220,22 +241,86 @@ async fn ls_refs_honours_prefixes_and_peels_tags() {
     assert!(!response.contains("refs/tags/light"), "{response}");
 }
 
+/// Every way of making or changing a shallow clone, over every protocol
+/// version. Each step is checked with `git fsck` and by counting commits.
 #[tokio::test(flavor = "multi_thread")]
-async fn shallow_clones_keep_working() {
+async fn shallow_clones_over_every_protocol_version() {
     let running = common::start(Duration::from_secs(5)).await;
     let url = running.url("/alice/demo.git");
     let work = tempfile::tempdir().unwrap();
     let work = work.path().to_owned();
     blocking(move || {
         let source = rich_history(&work);
+        let total = count(&source, "HEAD");
+        // Excluding the feature branch's first commit (and so all history
+        // before it) leaves the newer main-line commits and the rest of feature.
+        git(&source, &["tag", "feature-base", "feature~2"]);
+        // Two commits far in the future, for `--shallow-since`: every other
+        // commit is made within the same few seconds.
+        git(&source, &["checkout", "-q", "-b", "dated"]);
+        for (i, date) in ["@4102444800 +0000", "@4102444900 +0000"].iter().enumerate() {
+            std::fs::write(source.join("dated.txt"), format!("{i}\n")).unwrap();
+            git(&source, &["add", "-A"]);
+            let env = [("GIT_COMMITTER_DATE", *date), ("GIT_AUTHOR_DATE", *date)];
+            git_output_env(&source, &env, &["commit", "-q", "-m", &format!("dated {i}")]);
+        }
+        git(&source, &["checkout", "-q", "main"]);
         push_all(&source, &url);
-        git(&work, &["clone", "-q", "--depth", "1", &url, "shallow"]);
-        let shallow = work.join("shallow");
-        assert_eq!(git(&shallow, &["rev-list", "--count", "HEAD"]).trim(), "1");
-        git(&shallow, &["fetch", "-q", "--deepen", "2"]);
-        let deeper: u32 = git(&shallow, &["rev-list", "--count", "HEAD"]).trim().parse().unwrap();
-        assert!(deeper > 1, "--deepen fetched nothing more");
-        git(&shallow, &["fsck"]);
+
+        for version in ["0", "1", "2"] {
+            let protocol = format!("protocol.version={version}");
+            let git_v = |dir: &Path, args: &[&str]| {
+                let mut all = vec!["-c", protocol.as_str()];
+                all.extend_from_slice(args);
+                git_output(dir, &all)
+            };
+            let name = format!("shallow-v{version}");
+            let clone = work.join(&name);
+
+            let (_, stderr) = git_v(&work, &["clone", "--progress", "--depth", "1", &url, &name]);
+            assert!(stderr.contains(NATIVE_MARKER), "v{version}:\n{stderr}");
+            assert_eq!(count(&clone, "HEAD"), 1, "v{version} --depth 1");
+            git(&clone, &["fsck"]);
+
+            // The merge, both its parents, and theirs.
+            git_v(&clone, &["fetch", "-q", "--deepen", "2"]);
+            assert_eq!(count(&clone, "HEAD"), 5, "v{version} --deepen 2 from a merge");
+            git(&clone, &["fsck"]);
+
+            // New commits on top of a shallow clone arrive without deepening it.
+            std::fs::write(source.join(format!("new-v{version}.txt")), "new\n").unwrap();
+            git(&source, &["add", "-A"]);
+            git(&source, &["commit", "-q", "-m", &format!("on top for v{version}")]);
+            push_all(&source, &url);
+            git_v(&clone, &["fetch", "-q", "origin", "main"]);
+            assert_eq!(count(&clone, "origin/main"), 6, "v{version} fetch into a shallow clone");
+            git(&clone, &["fsck"]);
+
+            git_v(&clone, &["fetch", "-q", "--unshallow", "origin", "main"]);
+            assert_eq!(count(&clone, "origin/main"), total + 1, "v{version} --unshallow");
+            assert_eq!(git(&clone, &["rev-parse", "--is-shallow-repository"]).trim(), "false");
+            git(&clone, &["fsck", "--full", "--strict"]);
+            git(&source, &["reset", "-q", "--hard", "HEAD~1"]);
+            git(&source, &["push", "-q", "--force", &url, "main"]);
+
+            let since = format!("since-v{version}");
+            let args = ["clone", "-q", "--single-branch", "--branch", "dated", "--shallow-since=2099-12-31"];
+            git_v(&work, &[&args[..], &[url.as_str(), since.as_str()]].concat());
+            assert_eq!(count(&work.join(&since), "HEAD"), 2, "v{version} --shallow-since");
+            git(&work.join(&since), &["fsck"]);
+
+            // main without feature-base and what's before it: the main-line
+            // commits after the fork, the later feature commits and the merge.
+            let exclude = format!("exclude-v{version}");
+            let args = ["clone", "-q", "--single-branch", "--shallow-exclude=feature-base"];
+            git_v(&work, &[&args[..], &[url.as_str(), exclude.as_str()]].concat());
+            assert_eq!(count(&work.join(&exclude), "HEAD"), 5 + 2 + 1, "v{version} --shallow-exclude");
+            git(&work.join(&exclude), &["fsck"]);
+        }
     })
     .await;
+}
+
+fn count(dir: &Path, rev: &str) -> usize {
+    git(dir, &["rev-list", "--count", rev]).trim().parse().unwrap()
 }
