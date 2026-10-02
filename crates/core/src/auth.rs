@@ -85,7 +85,7 @@ impl Core {
             Some(password) => Some(hash_password(password).await?),
             None => None,
         };
-        let mut tx = self.db.begin().await?;
+        let mut tx = db::begin_write(&self.db).await?;
         let user = insert_user(&mut tx, &name, email, password_hash.as_deref(), new.admin).await?;
         tx.commit().await?;
         Ok(user)
@@ -106,23 +106,16 @@ impl Core {
         let password = new.password.ok_or_else(|| Error::InvalidInput("a password is required".into()))?;
         let password_hash = hash_password(password).await?;
 
-        let mut tx = self.db.begin().await?;
+        let mut tx = db::begin_write(&self.db).await?;
         if mode == Registration::Invite {
             let hash = sha256(invite.ok_or(Error::InvalidInvite)?.as_bytes());
             let hash = &hash[..];
-            let row = sqlx::query!(
-                "SELECT expires_at FROM one_time_tokens WHERE token_hash = ? AND purpose = 'invite' AND used_at IS NULL",
-                hash
-            )
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or(Error::InvalidInvite)?;
-            if db::parse_time(&row.expires_at) <= jiff::Timestamp::now() {
-                return Err(Error::InvalidInvite);
-            }
+            // Used up in the same statement that checks it, so two sign-ups
+            // can't share one invite.
             let now = db::now();
             let used = sqlx::query!(
-                "UPDATE one_time_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL",
+                "UPDATE one_time_tokens SET used_at = ?1
+                 WHERE token_hash = ?2 AND purpose = 'invite' AND used_at IS NULL AND expires_at > ?1",
                 now,
                 hash
             )
@@ -147,9 +140,8 @@ impl Core {
         let secret = random_base62(32);
         let hash = sha256(secret.as_bytes());
         let hash = &hash[..];
-        let now = jiff::Timestamp::now();
-        let expires = now.checked_add(INVITE_LIFETIME).expect("a week from now is a valid time").to_string();
-        let now = now.to_string();
+        let now = db::now();
+        let expires = now + INVITE_LIFETIME.as_secs() as i64;
         sqlx::query!(
             "INSERT INTO one_time_tokens (token_hash, purpose, created_at, expires_at) VALUES (?, 'invite', ?, ?)",
             hash,
@@ -241,17 +233,14 @@ impl Core {
         else {
             return Ok(None);
         };
-        let now = jiff::Timestamp::now();
-        let created = db::parse_time(&row.created_at);
-        let last_seen = db::parse_time(&row.last_seen_at);
-        let expired = elapsed(created, now) > self.auth.session_max()
-            || elapsed(last_seen, now) > self.auth.session_idle();
+        let now = db::now();
+        let expired = now - row.created_at > seconds(self.auth.session_max())
+            || now - row.last_seen_at > seconds(self.auth.session_idle());
         if expired || row.suspended_at.is_some() {
             self.end_session(id_hash).await?;
             return Ok(None);
         }
-        if elapsed(last_seen, now) > TOUCH_INTERVAL {
-            let now = now.to_string();
+        if now - row.last_seen_at > seconds(TOUCH_INTERVAL) {
             sqlx::query!("UPDATE sessions SET last_seen_at = ? WHERE id_hash = ?", now, hash)
                 .execute(&self.db)
                 .await?;
@@ -298,7 +287,7 @@ impl Core {
         let hash = sha256(secret.as_bytes());
         let hash = &hash[..];
         let (scope_text, now) = (scopes.to_string(), db::now());
-        let expires = expires_at.map(|at| at.to_string());
+        let expires = expires_at.map(|at| at.as_second());
         let id = sqlx::query_scalar!(
             r#"INSERT INTO access_tokens (user_id, name, token_hash, scopes, created_at, expires_at)
                VALUES (?, ?, ?, ?, ?, ?) RETURNING id AS "id!""#,
@@ -315,8 +304,9 @@ impl Core {
             id,
             name: name.to_owned(),
             scopes,
-            created_at: db::parse_time(&now),
-            expires_at,
+            created_at: db::time(now),
+            // As stored, in whole seconds.
+            expires_at: expires.map(db::time),
             last_used_at: None,
         };
         Ok(NewToken { info, secret })
@@ -336,9 +326,9 @@ impl Core {
                 id: row.id,
                 name: row.name,
                 scopes: parse_scopes(&row.scopes),
-                created_at: db::parse_time(&row.created_at),
-                expires_at: row.expires_at.as_deref().map(db::parse_time),
-                last_used_at: row.last_used_at.as_deref().map(db::parse_time),
+                created_at: db::time(row.created_at),
+                expires_at: row.expires_at.map(db::time),
+                last_used_at: row.last_used_at.map(db::time),
             })
             .collect())
     }
@@ -364,29 +354,22 @@ impl Core {
         }
         let hash = sha256(secret.as_bytes());
         let hash = &hash[..];
+        let now = db::now();
         let Some(row) = sqlx::query!(
-            r#"SELECT t.id AS "token_id!", t.scopes, t.expires_at, t.last_used_at,
-                      u.id AS "id!", o.name, u.is_admin AS "is_admin: bool", u.suspended_at
+            r#"SELECT t.id AS "token_id!", t.scopes, t.last_used_at,
+                      u.id AS "id!", o.name, u.is_admin AS "is_admin: bool"
                FROM access_tokens t JOIN users u ON u.id = t.user_id JOIN owners o ON o.id = u.id
-               WHERE t.token_hash = ?"#,
-            hash
+               WHERE t.token_hash = ?1 AND (t.expires_at IS NULL OR t.expires_at > ?2)
+                 AND u.suspended_at IS NULL"#,
+            hash,
+            now
         )
         .fetch_optional(&self.db)
         .await?
         else {
             return Ok(None);
         };
-        let now = jiff::Timestamp::now();
-        if row.suspended_at.is_some() || row.expires_at.as_deref().is_some_and(|at| db::parse_time(at) <= now)
-        {
-            return Ok(None);
-        }
-        let stale = row
-            .last_used_at
-            .as_deref()
-            .is_none_or(|at| elapsed(db::parse_time(at), now) > TOKEN_TOUCH_INTERVAL);
-        if stale {
-            let now = now.to_string();
+        if row.last_used_at.is_none_or(|at| now - at > seconds(TOKEN_TOUCH_INTERVAL)) {
             sqlx::query!("UPDATE access_tokens SET last_used_at = ? WHERE id = ?", now, row.token_id)
                 .execute(&self.db)
                 .await?;
@@ -462,8 +445,9 @@ fn parse_scopes(text: &str) -> Scopes {
     })
 }
 
-fn elapsed(since: jiff::Timestamp, now: jiff::Timestamp) -> Duration {
-    Duration::try_from(now.duration_since(since)).unwrap_or(Duration::ZERO)
+/// A duration in whole seconds, to compare with stored times.
+fn seconds(duration: Duration) -> i64 {
+    i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
 }
 
 /// Argon2id with the crate's defaults (at least OWASP's minimum), as a PHC
@@ -587,13 +571,13 @@ mod tests {
         core.start_session(alice.id, &hash).await.unwrap();
         assert_eq!(core.session_user(&hash).await.unwrap(), Some(alice.clone()));
 
-        let long_ago = (jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24 * 15)).to_string();
-        sqlx::query("UPDATE sessions SET last_seen_at = ?").bind(&long_ago).execute(&core.db).await.unwrap();
+        let long_ago = db::now() - 15 * 24 * 60 * 60;
+        sqlx::query!("UPDATE sessions SET last_seen_at = ?", long_ago).execute(&core.db).await.unwrap();
         assert_eq!(core.session_user(&hash).await.unwrap(), None, "idle for 15 days");
 
         core.start_session(alice.id, &hash).await.unwrap();
-        let ancient = (jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24 * 91)).to_string();
-        sqlx::query("UPDATE sessions SET created_at = ?").bind(&ancient).execute(&core.db).await.unwrap();
+        let ancient = db::now() - 91 * 24 * 60 * 60;
+        sqlx::query!("UPDATE sessions SET created_at = ?", ancient).execute(&core.db).await.unwrap();
         assert_eq!(core.session_user(&hash).await.unwrap(), None, "older than 90 days");
     }
 
@@ -618,8 +602,8 @@ mod tests {
         let soon = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(3600);
         let expiring =
             core.create_token(&alice, "x", Scopes::new([Scope::RepoRead]), Some(soon)).await.unwrap();
-        let past = (jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1)).to_string();
-        sqlx::query("UPDATE access_tokens SET expires_at = ?").bind(&past).execute(&core.db).await.unwrap();
+        let past = db::now() - 1;
+        sqlx::query!("UPDATE access_tokens SET expires_at = ?", past).execute(&core.db).await.unwrap();
         assert_eq!(core.token_actor(&expiring.secret).await.unwrap(), None);
     }
 

@@ -6,7 +6,7 @@
       {
         "name": "created_at",
         "ordinal": 0,
-        "type_info": "Text",
+        "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "sessions",
@@ -17,7 +17,7 @@
       {
         "name": "last_seen_at",
         "ordinal": 1,
-        "type_info": "Text",
+        "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "sessions",
@@ -61,7 +61,7 @@
       {
         "name": "suspended_at",
         "ordinal": 5,
-        "type_info": "Text",
+        "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "users",

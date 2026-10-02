@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO emails (user_id, address, address_key, is_primary) VALUES (?, 'a2@example.com', 'a2@example.com', 1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "0348cdfcb5b3d848d689af5ad911e5549d3ba08fe45da27ec028d5f54b81f5e5"
+}

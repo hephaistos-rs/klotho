@@ -39,7 +39,7 @@
       {
         "name": "suspended_at",
         "ordinal": 3,
-        "type_info": "Text",
+        "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "users",

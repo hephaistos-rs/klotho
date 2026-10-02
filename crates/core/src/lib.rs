@@ -62,7 +62,7 @@ impl Core {
 
     /// Readiness (NFR-OPS-022): the database answers and the storage root exists.
     pub async fn ready(&self) -> Result<()> {
-        sqlx::query("SELECT 1").execute(&self.db).await?;
+        sqlx::query!("SELECT 1 AS one").fetch_one(&self.db).await?;
         if !self.store.root().is_dir() {
             return Err(Error::StorageUnavailable(self.store.root().display().to_string()));
         }

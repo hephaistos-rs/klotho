@@ -29,7 +29,7 @@ Tables in the metadata store. `*_hash` is SHA-256 for high-entropy random tokens
 | Table | Key columns | Notes |
 |---|---|---|
 | `users` | `id`, `username`, `username_key`, `password_hash?`, `is_admin`, `suspended_at?` | `password_hash` is nullable: passkey-only accounts have none |
-| `emails` | `user_id`, `address`, `address_key`, `verified_at?`, `is_primary` | `address_key` = lowercased; unique |
+| `emails` | `id`, `user_id`, `address`, `address_key`, `verified_at?`, `is_primary` | `address_key` = lowercased; unique. At most one primary address per user (a partial unique index) |
 | `sessions` | `id_hash`, `user_id`, `created_at`, `last_seen_at`, `sudo_until?`, `ip`, `user_agent` | The cookie holds the random ID; the database holds only its hash |
 | `one_time_tokens` | `token_hash`, `purpose` (`magic_link` / `password_reset` / `email_verify` / `mfa_ticket` / `invite`), `user_id?`, `email?`, `expires_at`, `used_at?` | One table for every single-use token |
 | `passkeys` | `id`, `user_id`, `credential` (serialised `webauthn-rs` Passkey), `name`, `created_at`, `last_used_at` | |

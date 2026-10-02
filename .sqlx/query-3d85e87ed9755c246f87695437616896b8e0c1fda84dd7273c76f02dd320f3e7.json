@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE one_time_tokens SET used_at = ?1\n                 WHERE token_hash = ?2 AND purpose = 'invite' AND used_at IS NULL AND expires_at > ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "3d85e87ed9755c246f87695437616896b8e0c1fda84dd7273c76f02dd320f3e7"
+}

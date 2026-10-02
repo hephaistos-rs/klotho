@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE owners SET created_at = 'yesterday' WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "dbeb4045372c3162c2a9b6b5b81b3c542d8b53f420ef4443c9c0af21d44dc1d5"
+}

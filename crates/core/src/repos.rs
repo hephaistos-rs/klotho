@@ -53,7 +53,7 @@ macro_rules! repo_from_row {
             },
             name: $row.name,
             private: $row.private,
-            created_at: db::parse_time(&$row.created_at),
+            created_at: db::time($row.created_at),
         }
     };
 }
@@ -75,7 +75,7 @@ impl Core {
         let full_name = format!("{}/{}", owner.name, name);
         let (display, key, now) = (name.as_str(), name.key(), db::now());
 
-        let mut tx = self.db.begin().await?;
+        let mut tx = db::begin_write(&self.db).await?;
         let id = sqlx::query_scalar!(
             r#"INSERT INTO repositories (owner_id, name, name_key, created_at, private) VALUES (?, ?, ?, ?, ?) RETURNING id AS "id!""#,
             owner.id,
@@ -93,7 +93,7 @@ impl Core {
             let _ = self.blocking(move |store| store.set_aside(id)).await;
             return Err(err.into());
         }
-        Ok(Repo { id, owner, name: name.to_string(), private, created_at: db::parse_time(&now) })
+        Ok(Repo { id, owner, name: name.to_string(), private, created_at: db::time(now) })
     }
 
     /// Creates a repository for `actor`: under their own name, or, for an
@@ -234,7 +234,7 @@ impl Core {
         let full_name = format!("{}/{}", owner.name, name);
         let (display, key, now) = (name.as_str(), name.key(), db::now());
 
-        let mut tx = self.db.begin().await?;
+        let mut tx = db::begin_write(&self.db).await?;
         let id = sqlx::query_scalar!(
             r#"INSERT INTO repositories (owner_id, name, name_key, created_at, private) VALUES (?, ?, ?, ?, 1) RETURNING id AS "id!""#,
             owner.id,
@@ -260,7 +260,7 @@ impl Core {
             return Err(err.into());
         }
         tracing::info!(path, repo = %full_name, id, "adopted repository");
-        Ok(Repo { id, owner, name: name.to_string(), private: true, created_at: db::parse_time(&now) })
+        Ok(Repo { id, owner, name: name.to_string(), private: true, created_at: db::time(now) })
     }
 
     /// Deletes the unadopted repository at `path` (FR-REPO-035).

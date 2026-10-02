@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT t.id AS \"token_id!\", t.scopes, t.expires_at, t.last_used_at,\n                      u.id AS \"id!\", o.name, u.is_admin AS \"is_admin: bool\", u.suspended_at\n               FROM access_tokens t JOIN users u ON u.id = t.user_id JOIN owners o ON o.id = u.id\n               WHERE t.token_hash = ?",
+  "query": "SELECT t.id AS \"token_id!\", t.scopes, t.last_used_at,\n                      u.id AS \"id!\", o.name, u.is_admin AS \"is_admin: bool\"\n               FROM access_tokens t JOIN users u ON u.id = t.user_id JOIN owners o ON o.id = u.id\n               WHERE t.token_hash = ?1 AND (t.expires_at IS NULL OR t.expires_at > ?2)\n                 AND u.suspended_at IS NULL",
   "describe": {
     "columns": [
       {
@@ -26,20 +26,9 @@
         }
       },
       {
-        "name": "expires_at",
-        "ordinal": 2,
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "access_tokens",
-            "name": "expires_at"
-          }
-        }
-      },
-      {
         "name": "last_used_at",
-        "ordinal": 3,
-        "type_info": "Text",
+        "ordinal": 2,
+        "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "access_tokens",
@@ -49,7 +38,7 @@
       },
       {
         "name": "id!",
-        "ordinal": 4,
+        "ordinal": 3,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -60,7 +49,7 @@
       },
       {
         "name": "name",
-        "ordinal": 5,
+        "ordinal": 4,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -71,7 +60,7 @@
       },
       {
         "name": "is_admin: bool",
-        "ordinal": 6,
+        "ordinal": 5,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -79,32 +68,19 @@
             "name": "is_admin"
           }
         }
-      },
-      {
-        "name": "suspended_at",
-        "ordinal": 7,
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "users",
-            "name": "suspended_at"
-          }
-        }
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 2
     },
     "nullable": [
       false,
       false,
       true,
-      true,
       false,
       false,
-      false,
-      true
+      false
     ]
   },
-  "hash": "8ecdd3f846ced72da209e04b4b7e35805f1568b916536da69c25e87ab0306e3f"
+  "hash": "7e528bc1f4e1b364f3b5a551c928fb0f79f9ba70301be34ea7248ba152032305"
 }
