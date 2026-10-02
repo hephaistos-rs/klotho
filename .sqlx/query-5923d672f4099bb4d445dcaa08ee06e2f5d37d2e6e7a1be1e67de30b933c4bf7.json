@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT u.id AS \"id!\", o.name, u.is_admin AS \"is_admin: bool\", u.suspended_at, u.password_hash\n                       FROM users u JOIN owners o ON o.id = u.id WHERE o.name_key = ?",
+  "query": "SELECT u.id AS \"id!\", o.name, u.is_admin AS \"is_admin: bool\", u.suspended_at, u.password_hash\n                   FROM users u JOIN owners o ON o.id = u.id WHERE o.name_key = ?",
   "describe": {
     "columns": [
       {
@@ -70,5 +70,5 @@
       true
     ]
   },
-  "hash": "04697e231f7d8df8bfc867f9078908f236714bd2631fb13767af0ac89ee1436a"
+  "hash": "5923d672f4099bb4d445dcaa08ee06e2f5d37d2e6e7a1be1e67de30b933c4bf7"
 }

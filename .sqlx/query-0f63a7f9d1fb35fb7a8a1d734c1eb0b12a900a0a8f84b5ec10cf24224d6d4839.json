@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "INSERT INTO repositories (owner_id, name, name_key, created_at, private) VALUES (?, ?, ?, ?, ?) RETURNING id AS \"id!\"",
+  "query": "INSERT INTO access_tokens (user_id, name, token_hash, scopes, created_at, expires_at)\n                   VALUES (?, ?, ?, ?, ?, ?) RETURNING id AS \"id!\"",
   "describe": {
     "columns": [
       {
@@ -9,18 +9,18 @@
         "type_info": "Integer",
         "origin": {
           "Table": {
-            "table": "repositories",
+            "table": "access_tokens",
             "name": "id"
           }
         }
       }
     ],
     "parameters": {
-      "Right": 5
+      "Right": 6
     },
     "nullable": [
       null
     ]
   },
-  "hash": "6fe68129a4ae36c69fe9da3c992c87f4f313abb629c39f21bfbe124ba80cc6d2"
+  "hash": "0f63a7f9d1fb35fb7a8a1d734c1eb0b12a900a0a8f84b5ec10cf24224d6d4839"
 }

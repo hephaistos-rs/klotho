@@ -66,3 +66,13 @@
 
 # rustc dumps stack traces here when it hits an internal compiler error
 rustc-ice-*.txt
+
+*.md
+!README.md
+!AGENTS.md
+!CLAUDE.md
+!CONTRIBUTING.md
+!ROADMAP.md
+!CHANGELOG.md
+!LICENSE.md
+!SECURITY.md

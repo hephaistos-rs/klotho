@@ -4,9 +4,9 @@ use klotho_git::{RepoId, RepoStore};
 use serde::Serialize;
 
 use crate::access::{Action, Actor, RepoFacts, Scope, authorize};
-use crate::error::is_unique_violation;
+use crate::meta::{NewRepoRecord, RepoPage};
 use crate::names::{OwnerName, RepoName};
-use crate::{Core, Error, Owner, OwnerKind, Result, db};
+use crate::{Core, Error, Owner, Result};
 
 /// A repository as the metadata store knows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -41,23 +41,6 @@ pub struct StorageReport {
     pub missing: Vec<Repo>,
 }
 
-/// A row from the `repo_select!` query.
-macro_rules! repo_from_row {
-    ($row:expr) => {
-        Repo {
-            id: $row.id,
-            owner: Owner {
-                id: $row.owner_id,
-                name: $row.owner_name,
-                kind: OwnerKind::from_db(&$row.owner_kind),
-            },
-            name: $row.name,
-            private: $row.private,
-            created_at: db::time($row.created_at),
-        }
-    };
-}
-
 impl Core {
     /// Creates an empty repository (FR-REPO-001, FR-STOR-005). The database row
     /// and the directory are created together or not at all:
@@ -72,28 +55,24 @@ impl Core {
     pub async fn create_repo(&self, owner: &str, name: &str, private: bool) -> Result<Repo> {
         let name = RepoName::parse_new(name)?;
         let owner = self.find_owner(owner).await?;
-        let full_name = format!("{}/{}", owner.name, name);
-        let (display, key, now) = (name.as_str(), name.key(), db::now());
-
-        let mut tx = db::begin_write(&self.db).await?;
-        let id = sqlx::query_scalar!(
-            r#"INSERT INTO repositories (owner_id, name, name_key, created_at, private) VALUES (?, ?, ?, ?, ?) RETURNING id AS "id!""#,
-            owner.id,
-            display,
-            key,
-            now,
+        let key = name.key();
+        let record = NewRepoRecord {
+            owner: &owner,
+            name: name.as_str(),
+            name_key: key,
             private,
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|err| if is_unique_violation(&err) { Error::RepoExists(full_name.clone()) } else { err.into() })?;
+            now: jiff::Timestamp::now(),
+        };
 
+        let mut tx = self.meta.begin_write().await?;
+        let repo = tx.create_repo(record).await?;
+        let id = repo.id;
         self.blocking(move |store| create_dir(store, id)).await?;
         if let Err(err) = tx.commit().await {
             let _ = self.blocking(move |store| store.set_aside(id)).await;
-            return Err(err.into());
+            return Err(err);
         }
-        Ok(Repo { id, owner, name: name.to_string(), private, created_at: db::time(now) })
+        Ok(repo)
     }
 
     /// Creates a repository for `actor`: under their own name, or, for an
@@ -133,9 +112,7 @@ impl Core {
     /// Makes a repository private or public (FR-REPO-010). Needs admin level.
     pub async fn set_private(&self, actor: &Actor, owner: &str, name: &str, private: bool) -> Result<Repo> {
         let repo = self.repo_for(actor, owner, name, Action::Admin).await?;
-        sqlx::query!("UPDATE repositories SET private = ? WHERE id = ?", private, repo.id)
-            .execute(&self.db)
-            .await?;
+        self.meta.set_private(repo.id, private).await?;
         Ok(Repo { private, ..repo })
     }
 
@@ -149,18 +126,7 @@ impl Core {
         else {
             return Err(not_found());
         };
-        let (owner_key, repo_key) = (owner_name.key(), repo_name.key());
-        let row = sqlx::query!(
-            r#"SELECT r.id AS "id!", r.name, r.created_at, r.private AS "private: bool", o.id AS "owner_id!", o.name AS owner_name, o.kind AS owner_kind
-               FROM repositories r JOIN owners o ON o.id = r.owner_id
-               WHERE o.name_key = ? AND r.name_key = ?"#,
-            owner_key,
-            repo_key,
-        )
-        .fetch_optional(&self.db)
-        .await?
-        .ok_or_else(not_found)?;
-        Ok(repo_from_row!(row))
+        self.meta.find_repo(owner_name.key(), repo_name.key()).await?.ok_or_else(not_found)
     }
 
     /// One page of an owner's repositories that `actor` can see, ordered by name
@@ -177,32 +143,18 @@ impl Core {
         // Whether `actor` can read this owner's private repositories, asked of
         // `authorize` itself so listing can't disagree with opening one.
         let sees_private = authorize(actor, RepoFacts { owner_id: owner.id, private: true }, Action::Read);
-        let after = after.unwrap_or("");
-        let limit = i64::from(limit);
-        let rows = sqlx::query!(
-            r#"SELECT r.id AS "id!", r.name, r.created_at, r.private AS "private: bool", o.id AS "owner_id!", o.name AS owner_name, o.kind AS owner_kind
-               FROM repositories r JOIN owners o ON o.id = r.owner_id
-               WHERE r.owner_id = ? AND r.name_key > ? AND (r.private = 0 OR ?)
-               ORDER BY r.name_key LIMIT ?"#,
-            owner.id,
-            after,
-            sees_private,
+        let page = RepoPage {
+            owner_id: owner.id,
+            after_key: after.unwrap_or(""),
+            include_private: sees_private,
             limit,
-        )
-        .fetch_all(&self.db)
-        .await?;
-        Ok(rows.into_iter().map(|row| repo_from_row!(row)).collect())
+        };
+        self.meta.list_repos(page).await
     }
 
     /// Compares the storage root with the database (FR-STOR-020).
     pub async fn storage_report(&self) -> Result<StorageReport> {
-        let rows = sqlx::query!(
-            r#"SELECT r.id AS "id!", r.name, r.created_at, r.private AS "private: bool", o.id AS "owner_id!", o.name AS owner_name, o.kind AS owner_kind
-               FROM repositories r JOIN owners o ON o.id = r.owner_id ORDER BY r.id"#
-        )
-        .fetch_all(&self.db)
-        .await?;
-        let repos: Vec<Repo> = rows.into_iter().map(|row| repo_from_row!(row)).collect();
+        let repos = self.meta.all_repos().await?;
 
         let ids: Vec<RepoId> = repos.iter().map(|repo| repo.id).collect();
         let (on_disk, present) = self
@@ -231,20 +183,18 @@ impl Core {
         let default_name = default_name.strip_suffix(".git").unwrap_or(default_name);
         let name = RepoName::parse_new(name.unwrap_or(default_name))?;
         let owner = self.find_owner(owner).await?;
-        let full_name = format!("{}/{}", owner.name, name);
-        let (display, key, now) = (name.as_str(), name.key(), db::now());
+        let key = name.key();
+        let record = NewRepoRecord {
+            owner: &owner,
+            name: name.as_str(),
+            name_key: key,
+            private: true,
+            now: jiff::Timestamp::now(),
+        };
 
-        let mut tx = db::begin_write(&self.db).await?;
-        let id = sqlx::query_scalar!(
-            r#"INSERT INTO repositories (owner_id, name, name_key, created_at, private) VALUES (?, ?, ?, ?, 1) RETURNING id AS "id!""#,
-            owner.id,
-            display,
-            key,
-            now,
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|err| if is_unique_violation(&err) { Error::RepoExists(full_name.clone()) } else { err.into() })?;
+        let mut tx = self.meta.begin_write().await?;
+        let repo = tx.create_repo(record).await?;
+        let id = repo.id;
 
         let from = path.to_owned();
         self.blocking(move |store| {
@@ -257,10 +207,10 @@ impl Core {
         if let Err(err) = tx.commit().await {
             let back = path.to_owned();
             let _ = self.blocking(move |store| store.unadopt(id, &back)).await;
-            return Err(err.into());
+            return Err(err);
         }
-        tracing::info!(path, repo = %full_name, id, "adopted repository");
-        Ok(Repo { id, owner, name: name.to_string(), private: true, created_at: db::time(now) })
+        tracing::info!(path, repo = %repo.full_name(), id, "adopted repository");
+        Ok(repo)
     }
 
     /// Deletes the unadopted repository at `path` (FR-REPO-035).

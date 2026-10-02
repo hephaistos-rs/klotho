@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT t.id AS \"token_id!\", t.scopes, t.last_used_at,\n                      u.id AS \"id!\", o.name, u.is_admin AS \"is_admin: bool\"\n               FROM access_tokens t JOIN users u ON u.id = t.user_id JOIN owners o ON o.id = u.id\n               WHERE t.token_hash = ?1 AND (t.expires_at IS NULL OR t.expires_at > ?2)\n                 AND u.suspended_at IS NULL",
+  "query": "SELECT t.id AS \"token_id!\", t.scopes, t.last_used_at,\n                          u.id AS \"id!\", o.name, u.is_admin AS \"is_admin: bool\"\n                   FROM access_tokens t JOIN users u ON u.id = t.user_id JOIN owners o ON o.id = u.id\n                   WHERE t.token_hash = ?1 AND (t.expires_at IS NULL OR t.expires_at > ?2)\n                     AND u.suspended_at IS NULL",
   "describe": {
     "columns": [
       {
@@ -82,5 +82,5 @@
       false
     ]
   },
-  "hash": "7e528bc1f4e1b364f3b5a551c928fb0f79f9ba70301be34ea7248ba152032305"
+  "hash": "bc1ed9f1226e663a408ba6ac95fbd6c023f0e6217312ea7ca7bb6d8636e86b10"
 }

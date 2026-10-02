@@ -7,14 +7,15 @@ use std::time::Duration;
 use argon2::Argon2;
 use argon2::password_hash::phc::PasswordHash;
 use argon2::password_hash::{PasswordHasher, PasswordVerifier};
+use jiff::Timestamp;
 use serde::Serialize;
 
 use crate::access::{Actor, Scope, Scopes};
 use crate::config::Registration;
-use crate::error::is_unique_violation;
+use crate::meta::{NewTokenRecord, NewUserRecord};
 use crate::names::OwnerName;
 use crate::secret::{base62, crc32, random_base62, sha256};
-use crate::{Core, Error, Result, db};
+use crate::{Core, Error, Result};
 
 /// Shortest and longest password accepted. The upper bound keeps hashing cheap.
 const PASSWORD_LEN: std::ops::RangeInclusive<usize> = 8..=1024;
@@ -85,8 +86,17 @@ impl Core {
             Some(password) => Some(hash_password(password).await?),
             None => None,
         };
-        let mut tx = db::begin_write(&self.db).await?;
-        let user = insert_user(&mut tx, &name, email, password_hash.as_deref(), new.admin).await?;
+        let (name_key, email_key) = (name.key(), email.map(str::to_lowercase));
+        let record = NewUserRecord {
+            name: name.as_str(),
+            name_key,
+            email: email.zip(email_key.as_deref()),
+            password_hash: password_hash.as_deref(),
+            admin: new.admin,
+            now: Timestamp::now(),
+        };
+        let mut tx = self.meta.begin_write().await?;
+        let user = tx.create_user(record).await?;
         tx.commit().await?;
         Ok(user)
     }
@@ -106,26 +116,24 @@ impl Core {
         let password = new.password.ok_or_else(|| Error::InvalidInput("a password is required".into()))?;
         let password_hash = hash_password(password).await?;
 
-        let mut tx = db::begin_write(&self.db).await?;
+        let now = Timestamp::now();
+        let mut tx = self.meta.begin_write().await?;
         if mode == Registration::Invite {
             let hash = sha256(invite.ok_or(Error::InvalidInvite)?.as_bytes());
-            let hash = &hash[..];
-            // Used up in the same statement that checks it, so two sign-ups
-            // can't share one invite.
-            let now = db::now();
-            let used = sqlx::query!(
-                "UPDATE one_time_tokens SET used_at = ?1
-                 WHERE token_hash = ?2 AND purpose = 'invite' AND used_at IS NULL AND expires_at > ?1",
-                now,
-                hash
-            )
-            .execute(&mut *tx)
-            .await?;
-            if used.rows_affected() != 1 {
+            if !tx.redeem_invite(&hash, now).await? {
                 return Err(Error::InvalidInvite);
             }
         }
-        let user = insert_user(&mut tx, &name, Some(email), Some(&password_hash), false).await?;
+        let (name_key, email_key) = (name.key(), email.to_lowercase());
+        let record = NewUserRecord {
+            name: name.as_str(),
+            name_key,
+            email: Some((email, &email_key)),
+            password_hash: Some(&password_hash),
+            admin: false,
+            now,
+        };
+        let user = tx.create_user(record).await?;
         tx.commit().await?;
         tracing::info!(user = %user.username, "registered");
         Ok(user)
@@ -139,38 +147,17 @@ impl Core {
     pub async fn create_invite(&self) -> Result<String> {
         let secret = random_base62(32);
         let hash = sha256(secret.as_bytes());
-        let hash = &hash[..];
-        let now = db::now();
-        let expires = now + INVITE_LIFETIME.as_secs() as i64;
-        sqlx::query!(
-            "INSERT INTO one_time_tokens (token_hash, purpose, created_at, expires_at) VALUES (?, 'invite', ?, ?)",
-            hash,
-            now,
-            expires
-        )
-        .execute(&self.db)
-        .await?;
+        let now = Timestamp::now();
+        let expires = now.checked_add(INVITE_LIFETIME).expect("a week from now is a valid time");
+        self.meta.create_invite(&hash, now, expires).await?;
         Ok(secret)
     }
 
     /// Looks a user up by username, case-insensitively.
     pub async fn find_user(&self, username: &str) -> Result<User> {
         let name = OwnerName::parse_lookup(username)?;
-        let key = name.key();
-        let row = sqlx::query!(
-            r#"SELECT u.id AS "id!", o.name, u.is_admin AS "is_admin: bool", u.suspended_at
-               FROM users u JOIN owners o ON o.id = u.id WHERE o.name_key = ?"#,
-            key
-        )
-        .fetch_optional(&self.db)
-        .await?
-        .ok_or_else(|| Error::OwnerNotFound(name.to_string()))?;
-        Ok(User {
-            id: row.id,
-            username: row.name,
-            is_admin: row.is_admin,
-            suspended: row.suspended_at.is_some(),
-        })
+        let record = self.meta.find_user(name.key()).await?;
+        Ok(record.ok_or_else(|| Error::OwnerNotFound(name.to_string()))?.user)
     }
 
     /// Checks a username and password (auth-flows.md, "Password sign-in").
@@ -179,24 +166,13 @@ impl Core {
     /// hashed, so neither the answer nor its timing tells which.
     pub async fn sign_in(&self, username: &str, password: &str) -> Result<User> {
         let found = match OwnerName::parse_lookup(username) {
-            Ok(name) => {
-                let key = name.key();
-                sqlx::query!(
-                    r#"SELECT u.id AS "id!", o.name, u.is_admin AS "is_admin: bool", u.suspended_at, u.password_hash
-                       FROM users u JOIN owners o ON o.id = u.id WHERE o.name_key = ?"#,
-                    key
-                )
-                .fetch_optional(&self.db)
-                .await?
-            }
+            Ok(name) => self.meta.find_user(name.key()).await?,
             Err(_) => None,
         };
-        let stored = found.as_ref().and_then(|row| row.password_hash.clone());
+        let stored = found.as_ref().and_then(|record| record.password_hash.clone());
         let matches = verify_password(password, stored).await?;
         match found {
-            Some(row) if matches && row.suspended_at.is_none() => {
-                Ok(User { id: row.id, username: row.name, is_admin: row.is_admin, suspended: false })
-            }
+            Some(record) if matches && !record.user.suspended => Ok(record.user),
             _ => Err(Error::InvalidCredentials),
         }
     }
@@ -204,54 +180,30 @@ impl Core {
     /// Records a web session for `user_id`. `id_hash` is the SHA-256 of the
     /// cookie's token; the token itself is never stored.
     pub async fn start_session(&self, user_id: i64, id_hash: &[u8; 32]) -> Result<()> {
-        let id_hash = &id_hash[..];
-        let now = db::now();
-        sqlx::query!(
-            "INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at) VALUES (?, ?, ?, ?)",
-            id_hash,
-            user_id,
-            now,
-            now
-        )
-        .execute(&self.db)
-        .await?;
-        Ok(())
+        self.meta.create_session(id_hash, user_id, Timestamp::now()).await
     }
 
     /// The user a session belongs to, if the session exists and hasn't expired
     /// (FR-AUTH-041). Expired sessions are deleted.
     pub async fn session_user(&self, id_hash: &[u8; 32]) -> Result<Option<User>> {
-        let hash = &id_hash[..];
-        let Some(row) = sqlx::query!(
-            r#"SELECT s.created_at, s.last_seen_at, u.id AS "id!", o.name, u.is_admin AS "is_admin: bool", u.suspended_at
-               FROM sessions s JOIN users u ON u.id = s.user_id JOIN owners o ON o.id = u.id
-               WHERE s.id_hash = ?"#,
-            hash
-        )
-        .fetch_optional(&self.db)
-        .await?
-        else {
+        let Some(session) = self.meta.find_session(id_hash).await? else {
             return Ok(None);
         };
-        let now = db::now();
-        let expired = now - row.created_at > seconds(self.auth.session_max())
-            || now - row.last_seen_at > seconds(self.auth.session_idle());
-        if expired || row.suspended_at.is_some() {
+        let now = Timestamp::now();
+        let expired = elapsed(session.created_at, now) > self.auth.session_max()
+            || elapsed(session.last_seen_at, now) > self.auth.session_idle();
+        if expired || session.user.suspended {
             self.end_session(id_hash).await?;
             return Ok(None);
         }
-        if now - row.last_seen_at > seconds(TOUCH_INTERVAL) {
-            sqlx::query!("UPDATE sessions SET last_seen_at = ? WHERE id_hash = ?", now, hash)
-                .execute(&self.db)
-                .await?;
+        if elapsed(session.last_seen_at, now) > TOUCH_INTERVAL {
+            self.meta.touch_session(id_hash, now).await?;
         }
-        Ok(Some(User { id: row.id, username: row.name, is_admin: row.is_admin, suspended: false }))
+        Ok(Some(session.user))
     }
 
     pub async fn end_session(&self, id_hash: &[u8; 32]) -> Result<()> {
-        let hash = &id_hash[..];
-        sqlx::query!("DELETE FROM sessions WHERE id_hash = ?", hash).execute(&self.db).await?;
-        Ok(())
+        self.meta.delete_session(id_hash).await
     }
 
     /// Creates a personal access token (FR-AUTH-011). Only administrators can
@@ -261,7 +213,7 @@ impl Core {
         user: &User,
         name: &str,
         scopes: Scopes,
-        expires_at: Option<jiff::Timestamp>,
+        expires_at: Option<Timestamp>,
     ) -> Result<NewToken> {
         let name = name.trim();
         if name.is_empty() || name.len() > 100 {
@@ -275,7 +227,8 @@ impl Core {
                 "only administrators can create tokens with the admin scope".into(),
             ));
         }
-        if expires_at.is_some_and(|at| at <= jiff::Timestamp::now()) {
+        let now = Timestamp::now();
+        if expires_at.is_some_and(|at| at <= now) {
             return Err(Error::InvalidInput("the expiry date must be in the future".into()));
         }
 
@@ -285,62 +238,19 @@ impl Core {
             base62(u64::from(crc32(random.as_bytes())), TOKEN_CHECKSUM_LEN)
         );
         let hash = sha256(secret.as_bytes());
-        let hash = &hash[..];
-        let (scope_text, now) = (scopes.to_string(), db::now());
-        let expires = expires_at.map(|at| at.as_second());
-        let id = sqlx::query_scalar!(
-            r#"INSERT INTO access_tokens (user_id, name, token_hash, scopes, created_at, expires_at)
-               VALUES (?, ?, ?, ?, ?, ?) RETURNING id AS "id!""#,
-            user.id,
-            name,
-            hash,
-            scope_text,
-            now,
-            expires
-        )
-        .fetch_one(&self.db)
-        .await?;
-        let info = TokenInfo {
-            id,
-            name: name.to_owned(),
-            scopes,
-            created_at: db::time(now),
-            // As stored, in whole seconds.
-            expires_at: expires.map(db::time),
-            last_used_at: None,
-        };
+        let record = NewTokenRecord { user_id: user.id, name, hash: &hash, scopes: &scopes, now, expires_at };
+        let info = self.meta.create_token(record).await?;
         Ok(NewToken { info, secret })
     }
 
     pub async fn list_tokens(&self, user_id: i64) -> Result<Vec<TokenInfo>> {
-        let rows = sqlx::query!(
-            r#"SELECT id AS "id!", name, scopes, created_at, expires_at, last_used_at
-               FROM access_tokens WHERE user_id = ? ORDER BY id"#,
-            user_id
-        )
-        .fetch_all(&self.db)
-        .await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| TokenInfo {
-                id: row.id,
-                name: row.name,
-                scopes: parse_scopes(&row.scopes),
-                created_at: db::time(row.created_at),
-                expires_at: row.expires_at.map(db::time),
-                last_used_at: row.last_used_at.map(db::time),
-            })
-            .collect())
+        self.meta.list_tokens(user_id).await
     }
 
     /// Revokes one of `user_id`'s tokens. Someone else's token is reported as
     /// not found.
     pub async fn revoke_token(&self, user_id: i64, token_id: i64) -> Result<()> {
-        let deleted =
-            sqlx::query!("DELETE FROM access_tokens WHERE id = ? AND user_id = ?", token_id, user_id)
-                .execute(&self.db)
-                .await?;
-        if deleted.rows_affected() == 0 {
+        if !self.meta.delete_token(user_id, token_id).await? {
             return Err(Error::TokenNotFound);
         }
         Ok(())
@@ -353,72 +263,21 @@ impl Core {
             return Ok(None);
         }
         let hash = sha256(secret.as_bytes());
-        let hash = &hash[..];
-        let now = db::now();
-        let Some(row) = sqlx::query!(
-            r#"SELECT t.id AS "token_id!", t.scopes, t.last_used_at,
-                      u.id AS "id!", o.name, u.is_admin AS "is_admin: bool"
-               FROM access_tokens t JOIN users u ON u.id = t.user_id JOIN owners o ON o.id = u.id
-               WHERE t.token_hash = ?1 AND (t.expires_at IS NULL OR t.expires_at > ?2)
-                 AND u.suspended_at IS NULL"#,
-            hash,
-            now
-        )
-        .fetch_optional(&self.db)
-        .await?
-        else {
+        let now = Timestamp::now();
+        let Some(token) = self.meta.find_live_token(&hash, now).await? else {
             return Ok(None);
         };
-        if row.last_used_at.is_none_or(|at| now - at > seconds(TOKEN_TOUCH_INTERVAL)) {
-            sqlx::query!("UPDATE access_tokens SET last_used_at = ? WHERE id = ?", now, row.token_id)
-                .execute(&self.db)
-                .await?;
+        if token.last_used_at.is_none_or(|at| elapsed(at, now) > TOKEN_TOUCH_INTERVAL) {
+            self.meta.touch_token(token.id, now).await?;
         }
-        let user = User { id: row.id, username: row.name, is_admin: row.is_admin, suspended: false };
-        Ok(Some(Actor::Token(user, parse_scopes(&row.scopes))))
+        Ok(Some(Actor::Token(token.user, token.scopes)))
     }
 }
 
-async fn insert_user(
-    tx: &mut sqlx::SqliteConnection,
-    name: &OwnerName,
-    email: Option<&str>,
-    password_hash: Option<&str>,
-    admin: bool,
-) -> Result<User> {
-    let (display, key, now) = (name.as_str(), name.key(), db::now());
-    let id = sqlx::query_scalar!(
-        r#"INSERT INTO owners (kind, name, name_key, created_at) VALUES ('user', ?, ?, ?) RETURNING id AS "id!""#,
-        display,
-        key,
-        now,
-    )
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|err| if is_unique_violation(&err) { Error::OwnerExists(name.to_string()) } else { err.into() })?;
-    sqlx::query!(
-        "INSERT INTO users (id, password_hash, is_admin) VALUES (?, ?, ?)",
-        id,
-        password_hash,
-        admin
-    )
-    .execute(&mut *tx)
-    .await?;
-    if let Some(email) = email {
-        let email_key = email.to_lowercase();
-        sqlx::query!(
-            "INSERT INTO emails (user_id, address, address_key, is_primary) VALUES (?, ?, ?, 1)",
-            id,
-            email,
-            email_key
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(|err| if is_unique_violation(&err) { Error::EmailExists } else { err.into() })?;
-    }
-    Ok(User { id, username: name.to_string(), is_admin: admin, suspended: false })
+/// How long ago `since` was; zero if it's in the future.
+fn elapsed(since: Timestamp, now: Timestamp) -> Duration {
+    Duration::try_from(now.duration_since(since)).unwrap_or(Duration::ZERO)
 }
-
 /// A minimal sanity check. Whether the address works is for email
 /// verification (Phase 5) to find out.
 fn check_email(email: &str) -> Result<&str> {
@@ -436,18 +295,6 @@ fn has_valid_checksum(secret: &str) -> bool {
     }
     let (random, checksum) = rest.split_at(TOKEN_RANDOM_LEN);
     base62(u64::from(crc32(random.as_bytes())), TOKEN_CHECKSUM_LEN) == checksum
-}
-
-fn parse_scopes(text: &str) -> Scopes {
-    text.parse().unwrap_or_else(|err| {
-        tracing::error!(%err, text, "unreadable token scopes in the database");
-        Scopes::default()
-    })
-}
-
-/// A duration in whole seconds, to compare with stored times.
-fn seconds(duration: Duration) -> i64 {
-    i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
 }
 
 /// Argon2id with the crate's defaults (at least OWASP's minimum), as a PHC
@@ -506,7 +353,7 @@ fn dummy_hash() -> &'static str {
 mod tests {
     use super::*;
     use crate::config::AuthConfig;
-    use crate::testing::{core, core_with};
+    use crate::testing::{core, core_and_pool, core_with};
 
     #[tokio::test]
     async fn sign_in_checks_the_password_and_hides_why_it_failed() {
@@ -523,12 +370,12 @@ mod tests {
 
     #[tokio::test]
     async fn passwords_are_stored_as_argon2id() {
-        let (_dir, core) = core().await;
+        let (_dir, core, db) = core_and_pool().await;
         core.create_user(NewUser { password: Some("correct horse"), ..NewUser::named("alice") })
             .await
             .unwrap();
-        let stored: String =
-            sqlx::query_scalar("SELECT password_hash FROM users").fetch_one(&core.db).await.unwrap();
+        let stored =
+            sqlx::query_scalar!("SELECT password_hash FROM users").fetch_one(&db).await.unwrap().unwrap();
         assert!(stored.starts_with("$argon2id$"), "{stored}");
         assert!(matches!(
             core.create_user(NewUser { password: Some("short"), ..NewUser::named("bob") }).await,
@@ -565,25 +412,25 @@ mod tests {
 
     #[tokio::test]
     async fn sessions_expire_when_idle_or_too_old() {
-        let (_dir, core) = core().await;
+        let (_dir, core, db) = core_and_pool().await;
         let alice = core.create_user(NewUser::named("alice")).await.unwrap();
         let hash = sha256(b"session token");
         core.start_session(alice.id, &hash).await.unwrap();
         assert_eq!(core.session_user(&hash).await.unwrap(), Some(alice.clone()));
 
-        let long_ago = db::now() - 15 * 24 * 60 * 60;
-        sqlx::query!("UPDATE sessions SET last_seen_at = ?", long_ago).execute(&core.db).await.unwrap();
+        let long_ago = Timestamp::now().as_second() - 15 * 24 * 60 * 60;
+        sqlx::query!("UPDATE sessions SET last_seen_at = ?", long_ago).execute(&db).await.unwrap();
         assert_eq!(core.session_user(&hash).await.unwrap(), None, "idle for 15 days");
 
         core.start_session(alice.id, &hash).await.unwrap();
-        let ancient = db::now() - 91 * 24 * 60 * 60;
-        sqlx::query!("UPDATE sessions SET created_at = ?", ancient).execute(&core.db).await.unwrap();
+        let ancient = Timestamp::now().as_second() - 91 * 24 * 60 * 60;
+        sqlx::query!("UPDATE sessions SET created_at = ?", ancient).execute(&db).await.unwrap();
         assert_eq!(core.session_user(&hash).await.unwrap(), None, "older than 90 days");
     }
 
     #[tokio::test]
     async fn tokens_authenticate_until_revoked_or_expired() {
-        let (_dir, core) = core().await;
+        let (_dir, core, db) = core_and_pool().await;
         let alice = core.create_user(NewUser::named("alice")).await.unwrap();
         let token = core.create_token(&alice, "ci", Scopes::new([Scope::RepoRead]), None).await.unwrap();
         assert!(token.secret.starts_with("klotho_pat_") && token.secret.len() == 47, "{}", token.secret);
@@ -602,8 +449,8 @@ mod tests {
         let soon = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(3600);
         let expiring =
             core.create_token(&alice, "x", Scopes::new([Scope::RepoRead]), Some(soon)).await.unwrap();
-        let past = db::now() - 1;
-        sqlx::query!("UPDATE access_tokens SET expires_at = ?", past).execute(&core.db).await.unwrap();
+        let past = Timestamp::now().as_second() - 1;
+        sqlx::query!("UPDATE access_tokens SET expires_at = ?", past).execute(&db).await.unwrap();
         assert_eq!(core.token_actor(&expiring.secret).await.unwrap(), None);
     }
 

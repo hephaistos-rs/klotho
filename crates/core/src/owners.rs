@@ -10,12 +10,6 @@ pub enum OwnerKind {
     Org,
 }
 
-impl OwnerKind {
-    pub(crate) fn from_db(kind: &str) -> Self {
-        if kind == "org" { Self::Org } else { Self::User }
-    }
-}
-
 /// A user or organisation: anything that can own repositories.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Owner {
@@ -30,12 +24,7 @@ impl Core {
     /// Looks an owner up by name, case-insensitively (FR-NAME-021).
     pub async fn find_owner(&self, name: &str) -> Result<Owner> {
         let name = OwnerName::parse_lookup(name)?;
-        let key = name.key();
-        let row = sqlx::query!(r#"SELECT id AS "id!", name, kind FROM owners WHERE name_key = ?"#, key)
-            .fetch_optional(&self.db)
-            .await?
-            .ok_or_else(|| Error::OwnerNotFound(name.to_string()))?;
-        Ok(Owner { id: row.id, name: row.name, kind: OwnerKind::from_db(&row.kind) })
+        self.meta.find_owner(name.key()).await?.ok_or_else(|| Error::OwnerNotFound(name.to_string()))
     }
 }
 

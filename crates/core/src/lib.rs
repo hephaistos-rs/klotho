@@ -2,21 +2,20 @@
 //!
 //! [`Core`] is the entry point. The web UI and the API both go through its
 //! methods, never through SQL or `klotho-git` directly, so they can't drift
-//! apart (FR-API-004).
+//! apart (FR-API-004). The services hold no SQL either: every query is in
+//! [`meta`], behind the `MetaStore` trait.
 
 pub mod access;
 mod auth;
 pub mod browse;
 pub mod config;
-pub mod db;
 mod error;
+mod meta;
 pub mod names;
 mod owners;
 mod repos;
 mod secret;
 mod urls;
-
-use sqlx::SqlitePool;
 
 pub use access::{Action, Actor, Scope, Scopes};
 pub use auth::{INVITE_LIFETIME, NewToken, NewUser, TokenInfo, User};
@@ -27,12 +26,15 @@ pub use owners::{Owner, OwnerKind};
 pub use repos::{Repo, StorageReport};
 pub use urls::Urls;
 
-use crate::config::{AuthConfig, DataPaths};
+use std::sync::Arc;
 
-/// The services, sharing one database pool and repository store. Cheap to clone.
+use crate::config::{AuthConfig, DataPaths};
+use crate::meta::{MetaStore, SqliteMeta};
+
+/// The services, sharing one metadata store and repository store. Cheap to clone.
 #[derive(Clone)]
 pub struct Core {
-    db: SqlitePool,
+    meta: Arc<dyn MetaStore>,
     store: RepoStore,
     urls: Urls,
     auth: AuthConfig,
@@ -41,9 +43,13 @@ pub struct Core {
 impl Core {
     /// Opens the database (running migrations) and the repository store.
     pub async fn open(paths: &DataPaths, urls: Urls, auth: AuthConfig) -> Result<Self> {
-        let db = db::open(&paths.database).await?;
+        let meta = SqliteMeta::open(&paths.database).await?;
+        Self::with_meta(Arc::new(meta), paths, urls, auth)
+    }
+
+    fn with_meta(meta: Arc<dyn MetaStore>, paths: &DataPaths, urls: Urls, auth: AuthConfig) -> Result<Self> {
         let store = RepoStore::new(&paths.repositories)?;
-        Ok(Self { db, store, urls, auth })
+        Ok(Self { meta, store, urls, auth })
     }
 
     pub fn urls(&self) -> &Urls {
@@ -62,7 +68,7 @@ impl Core {
 
     /// Readiness (NFR-OPS-022): the database answers and the storage root exists.
     pub async fn ready(&self) -> Result<()> {
-        sqlx::query!("SELECT 1 AS one").fetch_one(&self.db).await?;
+        self.meta.ping().await?;
         if !self.store.root().is_dir() {
             return Err(Error::StorageUnavailable(self.store.root().display().to_string()));
         }
@@ -89,9 +95,23 @@ pub(crate) mod testing {
     }
 
     pub async fn core_with(auth: AuthConfig) -> (tempfile::TempDir, Core) {
+        let (dir, core, _) = core_and_pool_with(auth).await;
+        (dir, core)
+    }
+
+    /// [`core`], and the SQLite pool under it, for tests that set up states
+    /// the services can't, such as a session from long ago.
+    pub async fn core_and_pool() -> (tempfile::TempDir, Core, sqlx::SqlitePool) {
+        core_and_pool_with(AuthConfig::default()).await
+    }
+
+    async fn core_and_pool_with(auth: AuthConfig) -> (tempfile::TempDir, Core, sqlx::SqlitePool) {
         let dir = tempfile::tempdir().unwrap();
         let paths = config::StorageConfig::default().resolve(dir.path());
-        let core = Core::open(&paths, Urls::new("http://localhost:3000").unwrap(), auth).await.unwrap();
-        (dir, core)
+        let meta = SqliteMeta::open(&paths.database).await.unwrap();
+        let pool = meta.pool().clone();
+        let urls = Urls::new("http://localhost:3000").unwrap();
+        let core = Core::with_meta(Arc::new(meta), &paths, urls, auth).unwrap();
+        (dir, core, pool)
     }
 }

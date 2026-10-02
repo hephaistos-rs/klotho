@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!\", name, scopes, created_at, expires_at, last_used_at\n               FROM access_tokens WHERE user_id = ? ORDER BY id",
+  "query": "SELECT id AS \"id!\", name, scopes, created_at, expires_at, last_used_at\n                   FROM access_tokens WHERE user_id = ? ORDER BY id",
   "describe": {
     "columns": [
       {
@@ -82,5 +82,5 @@
       true
     ]
   },
-  "hash": "676ad3701168c579f5bae3cd1f154864b5e43afd4cbb2f3e97f64e12c6f436d2"
+  "hash": "039a1cfe94df7f9d893123248f6ebdf06f77924e9618d77a14a0c0296291c7b6"
 }

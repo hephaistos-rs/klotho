@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT r.id AS \"id!\", r.name, r.created_at, r.private AS \"private: bool\", o.id AS \"owner_id!\", o.name AS owner_name, o.kind AS owner_kind\n               FROM repositories r JOIN owners o ON o.id = r.owner_id ORDER BY r.id",
+  "query": "SELECT r.id AS \"id!\", r.name, r.created_at, r.private AS \"private: bool\",\n                          o.id AS \"owner_id!\", o.name AS owner_name, o.kind AS owner_kind\n                   FROM repositories r JOIN owners o ON o.id = r.owner_id\n                   WHERE r.owner_id = ? AND r.name_key > ? AND (r.private = 0 OR ?)\n                   ORDER BY r.name_key LIMIT ?",
   "describe": {
     "columns": [
       {
@@ -82,7 +82,7 @@
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 4
     },
     "nullable": [
       false,
@@ -94,5 +94,5 @@
       false
     ]
   },
-  "hash": "c6c32ff1750df635fefa66244c554186465d3f9b8bfdfe80ce2c6e488b16347c"
+  "hash": "09d9d9b5c6541183c211b3cf093d60dec36b7d7d35523ac95b7b3b910a213fd3"
 }

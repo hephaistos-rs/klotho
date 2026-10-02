@@ -50,7 +50,3 @@ pub enum Error {
     #[error("background task failed: {0}")]
     Join(#[from] tokio::task::JoinError),
 }
-
-pub(crate) fn is_unique_violation(err: &sqlx::Error) -> bool {
-    matches!(err, sqlx::Error::Database(db) if db.is_unique_violation())
-}

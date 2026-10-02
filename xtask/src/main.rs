@@ -68,7 +68,7 @@ fn sqlx_prepare() -> Result {
         run(Command::new("sqlx").args(args).env("DATABASE_URL", &url).current_dir(&root))
     };
     sqlx(&["database", "create"])?;
-    sqlx(&["migrate", "run", "--source", "crates/core/migrations"])?;
+    sqlx(&["migrate", "run", "--source", "crates/core/migrations/sqlite"])?;
     run(Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
         .args(["sqlx", "prepare", "--workspace", "--", "--all-targets"])
         .env("DATABASE_URL", &url)
