@@ -339,7 +339,7 @@ Phases run in order: 0, 1, 1b, 2 and onwards. Phase 1b (the native git transport
 **Done when:**
 - [ ] `cargo xtask dist` produces one binary that serves the whole UI, with no other files next to it.
 - [ ] With JavaScript disabled, you can browse a repository, open files and read history.
-- [ ] Downloading a 1 GiB file through `raw` doesn't grow server memory.
+- [x] Downloading a 1 GiB file through `raw` doesn't grow server memory (`a_1_gib_raw_download_does_not_grow_server_memory` in `crates/server/tests/raw_memory.rs`).
 - [ ] `/api/v1/nope` returns JSON 404, and `/someone/something` returns the HTML 404 page with status 404.
 - [ ] Every page action added in this phase has a matching API endpoint (check the P3 rows).
 
@@ -352,6 +352,9 @@ Phases run in order: 0, 1, 1b, 2 and onwards. Phase 1b (the native git transport
 >   - A log cursor can't be "the next commit": restarting a walk there loses the other side of every merge still pending. The cursor is `<tip>.<depth>`: the commit the first page started from, and how many commits came before. Pages stay stable when the branch moves, and page *n* costs time in proportion to its depth (NFR-PERF-014).
 >   - `?ref=` goes through our own resolver, not `rev_parse_single`, so `:/text` (a full history search), `@{…}` and `~n` can't be sent from a URL. The `ref/path` split tries each segment boundary from the longest, one ref lookup each, instead of listing every ref.
 >   - `gix::init_bare` points HEAD at `master` unless configured otherwise. Test fixtures that commit to `main` set HEAD themselves.
+> - **Learned in the contents step:**
+>   - gix has no streaming blob read: `find_object` decodes the whole object into a buffer. `BlobReader` reads the object database itself: a loose object is one zlib stream (`blob <size>\0` first), and a blob stored whole in a pack is a zlib stream from its entry's `data_offset` in the memory-mapped pack (`gix::zlib::stream::inflate::read` over a `BufRead`). Only deltas fall back to gix, and git doesn't delta-compress files above `core.bigFileThreshold`.
+>   - A counting `#[global_allocator]` in a test binary of its own measures server heap use well, because the `git` client is a separate process. The 1 GiB test takes about two minutes, mostly git compressing and pushing the file.
 
 ### Phase 4: Git hardening and data safety
 

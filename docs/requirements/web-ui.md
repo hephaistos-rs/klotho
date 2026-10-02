@@ -72,4 +72,4 @@ The UI is a Topcoat app (crate `klotho-web`) that axum mounts as its fallback se
 
 ## Conflicts with the current implementation
 
-None: there is no web UI yet (commit `6b4895f`). The API's `raw` endpoint serves blobs as `application/octet-stream`, which already fits FR-UI-004's intent.
+Checked 2026-10-02, during Phase 3: no conflicts. The browse pages don't exist yet. The API's `raw` endpoint serves blobs as `application/octet-stream`, which already fits FR-UI-004's intent.

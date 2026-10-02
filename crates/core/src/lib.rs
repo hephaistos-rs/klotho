@@ -20,7 +20,7 @@ use sqlx::SqlitePool;
 
 pub use access::{Action, Actor, Scope, Scopes};
 pub use auth::{INVITE_LIFETIME, NewToken, NewUser, TokenInfo, User};
-pub use browse::LogQuery;
+pub use browse::{LogQuery, RawFile};
 pub use error::{Error, Result};
 use klotho_git::RepoStore;
 pub use owners::{Owner, OwnerKind};

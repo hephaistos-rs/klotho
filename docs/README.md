@@ -70,8 +70,7 @@ Requirements that simply haven't been implemented yet are not listed as conflict
 
 ## Most important conflicts today
 
-Checked after Phase 2 (2026-10-02). Phase 0 fixed graceful shutdown, the config file and the data directory. Phase 1 fixed name casing, Windows device names, atomic creation and unregistered repositories. Phase 1b replaced the `git` program with Klotho's own protocol engine, which fixed push durability and gave pushes their hook points. Phase 2 closed the critical one: pushing, creating and administering now need an account and a token, and private repositories are invisible to anyone without access.
+Checked 2026-10-02, during Phase 3. Phase 0 fixed graceful shutdown, the config file and the data directory. Phase 1 fixed name casing, Windows device names, atomic creation and unregistered repositories. Phase 1b replaced the `git` program with Klotho's own protocol engine, which fixed push durability and gave pushes their hook points. Phase 2 closed the critical one: pushing, creating and administering now need an account and a token, and private repositories are invisible to anyone without access. Phase 3 so far: raw downloads stream instead of loading the file into memory.
 
 1. **Pushes have no size limit, and pack building has no concurrency cap** ([NFR-SEC-020](requirements/security.md), [NFR-SEC-022](requirements/security.md)).
 2. **Failed sign-ins aren't throttled** ([FR-AUTH-043](requirements/auth.md)), and the default address is `0.0.0.0` ([NFR-OPS-012](requirements/operations.md)), so the sign-in page is reachable from the network.
-3. **Raw file downloads are loaded fully into memory** ([NFR-PERF-013](requirements/performance.md)).

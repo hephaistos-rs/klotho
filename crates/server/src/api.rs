@@ -30,7 +30,7 @@ use axum::{Json, Router};
 use klotho_core::browse::{DEFAULT_PAGE, MAX_PAGE};
 use klotho_core::config::Registration;
 use klotho_core::{Action, Core, LogQuery, NewUser, Owner, Repo, Scope, StorageReport, TokenInfo};
-use klotho_git::{CommitInfo, RepoInfo, TreeEntryInfo};
+use klotho_git::{CommitInfo, Contents, RepoInfo};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
@@ -164,12 +164,11 @@ async fn tree(
     headers: HeaderMap,
     Path((owner, name)): Path<(String, String)>,
     Query(query): Query<RevQuery>,
-) -> Result<Json<Vec<TreeEntryInfo>>, ApiError> {
+) -> Result<Json<Contents>, ApiError> {
     let actor = api_actor(&core, &headers).await?;
     let repo = core.repo_for(&actor, &owner, &name, Action::Read).await?;
-    Ok(Json(
-        core.with_git(&repo, move |git| TreeEntryInfo::list(git, query.rev.as_deref(), &query.path)).await?,
-    ))
+    let (rev, cursor) = (query.rev.as_deref(), query.cursor.as_deref());
+    Ok(Json(core.contents(&repo, rev, &query.path, cursor, query.limit).await?))
 }
 
 async fn raw(
@@ -180,14 +179,19 @@ async fn raw(
 ) -> Result<impl IntoResponse, ApiError> {
     let actor = api_actor(&core, &headers).await?;
     let repo = core.repo_for(&actor, &owner, &name, Action::Read).await?;
-    let data = core
-        .with_git(&repo, move |git| klotho_git::read_blob(git, query.rev.as_deref(), &query.path))
-        .await?;
+    let file = core.raw(&repo, query.rev.as_deref(), &query.path).await?;
+    let chunks = futures_util::stream::unfold(file.chunks, |mut chunks| async move {
+        chunks.recv().await.map(|chunk| (chunk, chunks))
+    });
     // Always octet-stream with nosniff, so a pushed HTML file can't run as a page
     // on this origin (NFR-SEC-010).
     Ok((
-        [(header::CONTENT_TYPE, "application/octet-stream"), (header::X_CONTENT_TYPE_OPTIONS, "nosniff")],
-        data,
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_owned()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+            (header::CONTENT_LENGTH, file.size.to_string()),
+        ],
+        axum::body::Body::from_stream(chunks),
     ))
 }
 

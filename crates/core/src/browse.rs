@@ -1,10 +1,18 @@
-//! Reading a repository's refs and history, for the web UI and the API alike
+//! Reading a repository: refs, history and contents, for the web UI and the API alike
 //! (FR-API-004). Every method takes a [`Repo`] from [`Core::repo_for`], so the
 //! caller has already been through `authorize()`.
 
-use klotho_git::{BranchInfo, CommitInfo, Page, RefTarget, Resolved, TagInfo};
+use std::io::Read;
 
-use crate::{Core, Repo, Result};
+use klotho_git::{BranchInfo, CommitInfo, Contents, FileInfo, Page, RefTarget, Resolved, TagInfo};
+use tokio::sync::{mpsc, oneshot};
+
+use crate::{Core, Error, Repo, Result};
+
+/// How much of a raw file is read at a time, and how many reads may wait in
+/// memory for a slow client: at most 256 KiB per download (NFR-PERF-013).
+const RAW_CHUNK: usize = 64 * 1024;
+const RAW_QUEUE: usize = 4;
 
 /// Page sizes (FR-API-020).
 pub const DEFAULT_PAGE: u32 = 30;
@@ -25,6 +33,15 @@ pub struct LogQuery {
     /// From the previous page's `next`. It overrides `rev`.
     pub cursor: Option<String>,
     pub limit: Option<u32>,
+}
+
+/// A file being read for download.
+pub struct RawFile {
+    /// The commit it was read from.
+    pub target: RefTarget,
+    pub size: u64,
+    /// The content, in order. An `Err` ends it early.
+    pub chunks: mpsc::Receiver<std::io::Result<Vec<u8>>>,
 }
 
 impl Core {
@@ -65,6 +82,70 @@ impl Core {
     pub async fn tag(&self, repo: &Repo, name: &str) -> Result<TagInfo> {
         let name = name.to_owned();
         self.with_git(repo, move |git| klotho_git::tag(git, &name)).await
+    }
+
+    /// What is at `path` in `rev`: a directory listing (paged), a file with its
+    /// text if small and not binary, a symlink or a submodule (FR-UI-001, 003).
+    pub async fn contents(
+        &self,
+        repo: &Repo,
+        rev: Option<&str>,
+        path: &str,
+        cursor: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<Contents> {
+        let (rev, path, cursor) = (rev.map(str::to_owned), path.to_owned(), cursor.map(str::to_owned));
+        let limit = page_size(limit);
+        self.with_git(repo, move |git| {
+            klotho_git::contents(git, rev.as_deref(), &path, cursor.as_deref(), limit)
+        })
+        .await
+    }
+
+    /// The README in the directory `dir` (the root if empty) of `rev` (FR-UI-002).
+    pub async fn readme(&self, repo: &Repo, rev: Option<&str>, dir: &str) -> Result<Option<FileInfo>> {
+        let (rev, dir) = (rev.map(str::to_owned), dir.to_owned());
+        self.with_git(repo, move |git| klotho_git::readme(git, rev.as_deref(), &dir)).await
+    }
+
+    /// The bytes of the file at `path` in `rev`, streamed (NFR-PERF-013). A
+    /// blocking task reads ahead at most a few chunks; it stops when the
+    /// receiver is dropped, e.g. because the client went away.
+    pub async fn raw(&self, repo: &Repo, rev: Option<&str>, path: &str) -> Result<RawFile> {
+        let (rev, path, id) = (rev.map(str::to_owned), path.to_owned(), repo.id);
+        let store = self.store.clone();
+        let (opened_tx, opened) = oneshot::channel();
+        let (tx, chunks) = mpsc::channel(RAW_QUEUE);
+        tokio::task::spawn_blocking(move || {
+            let opened = store.open(id).and_then(|git| klotho_git::open_file(&git, rev.as_deref(), &path));
+            let mut reader = match opened {
+                Ok((target, reader)) => {
+                    let _ = opened_tx.send(Ok((target, reader.size())));
+                    reader
+                }
+                Err(err) => {
+                    let _ = opened_tx.send(Err(err));
+                    return;
+                }
+            };
+            loop {
+                let mut chunk = vec![0; RAW_CHUNK];
+                let item = match reader.read(&mut chunk) {
+                    Ok(0) => return,
+                    Ok(n) => {
+                        chunk.truncate(n);
+                        Ok(chunk)
+                    }
+                    Err(err) => Err(err),
+                };
+                let failed = item.is_err();
+                if tx.blocking_send(item).is_err() || failed {
+                    return;
+                }
+            }
+        });
+        let (target, size) = opened.await.map_err(|_| Error::Internal("raw reader stopped".to_owned()))??;
+        Ok(RawFile { target, size, chunks })
     }
 
     /// The commit log, newest first, a page at a time (FR-UI-005, NFR-PERF-014).

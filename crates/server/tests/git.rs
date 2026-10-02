@@ -157,3 +157,58 @@ async fn pushed_history_reads_back_through_the_core_services() {
     let resolved = core.resolve_spec(&repo, "feature/login/src/lib.rs").await.unwrap();
     assert_eq!((resolved.target.name.as_str(), resolved.path.as_str()), ("feature/login", "src/lib.rs"));
 }
+
+/// A pushed tree reads back through `contents`, `readme` and `raw`. Pushed
+/// packs are kept as packs, so `raw` reads the blob from the pack.
+#[tokio::test(flavor = "multi_thread")]
+async fn pushed_files_read_back_through_contents_readme_and_raw() {
+    use klotho_core::{Action, Actor};
+    use klotho_git::{Contents, EntryType};
+
+    let running = common::start(Duration::from_secs(5)).await;
+    let work = tempfile::tempdir().unwrap();
+    let (work_path, url) = (work.path().to_owned(), running.url("/alice/demo.git"));
+    blocking(move || {
+        let local = work_path.join("local");
+        std::fs::create_dir_all(local.join("docs")).unwrap();
+        git(&local, &["init", "-q"]);
+        std::fs::write(local.join("Readme.markdown"), "# Demo\n").unwrap();
+        std::fs::write(local.join("docs").join("guide.txt"), "guide\n").unwrap();
+        std::fs::write(local.join("data.bin"), [0u8, 1, 2, 3]).unwrap();
+        git(&local, &["add", "."]);
+        git(&local, &["commit", "-q", "-m", "files"]);
+        git(&local, &["push", "-q", &url, "HEAD:refs/heads/main"]);
+    })
+    .await;
+
+    let core = &running.core;
+    let repo = core.repo_for(&Actor::Anonymous, "alice", "demo", Action::Read).await.unwrap();
+    let Contents::Dir(root) = core.contents(&repo, None, "", None, None).await.unwrap() else { panic!() };
+    let names: Vec<_> = root.entries.iter().map(|entry| (entry.name.as_str(), entry.kind)).collect();
+    assert_eq!(
+        names,
+        [("docs", EntryType::Dir), ("Readme.markdown", EntryType::File), ("data.bin", EntryType::File)]
+    );
+    let Contents::File(data) = core.contents(&repo, Some("main"), "data.bin", None, None).await.unwrap()
+    else {
+        panic!()
+    };
+    assert!(data.binary && data.size == 4);
+
+    let readme = core.readme(&repo, None, "").await.unwrap().unwrap();
+    assert_eq!(readme.text.as_deref(), Some("# Demo\n"));
+
+    let mut raw = core.raw(&repo, None, "docs/guide.txt").await.unwrap();
+    assert_eq!(raw.size, 6);
+    let mut bytes = Vec::new();
+    while let Some(chunk) = raw.chunks.recv().await {
+        bytes.extend(chunk.unwrap());
+    }
+    assert_eq!(bytes, b"guide\n");
+    let missing = core.raw(&repo, None, "docs").await.err().unwrap();
+    assert!(matches!(missing, klotho_core::Error::Git(klotho_git::Error::PathNotFound(_))));
+
+    let git = core.store().open(repo.id).unwrap();
+    let (_, reader) = klotho_git::open_file(&git, None, "docs/guide.txt").unwrap();
+    assert!(!reader.in_memory(), "a blob stored whole in a pack streams");
+}

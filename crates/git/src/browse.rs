@@ -4,7 +4,6 @@
 //! `HEAD~3`, `@{…}` or `:/message` searches. `None` means the default branch.
 
 use gix::ObjectId;
-use gix::objs::tree::EntryKind;
 use gix::revision::walk::Sorting;
 use gix::traverse::commit::simple::CommitTimeOrder;
 use serde::{Serialize, Serializer};
@@ -154,13 +153,6 @@ pub struct TagInfo {
 pub struct Annotation {
     pub tagger: Option<Signature>,
     pub message: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct TreeEntryInfo {
-    pub name: String,
-    pub kind: &'static str,
-    pub id: String,
 }
 
 impl RepoInfo {
@@ -404,110 +396,31 @@ fn changes_path(repo: &gix::Repository, commit: &gix::Commit<'_>, path: &str) ->
     Ok(true)
 }
 
-impl TreeEntryInfo {
-    /// The entries of the directory at `path` (empty for the root) in `rev`.
-    pub fn list(repo: &gix::Repository, rev: Option<&str>, path: &str) -> Result<Vec<Self>> {
-        let root = commit_for(repo, rev)?.tree().map_err(Error::git)?;
-        let tree = if path.is_empty() {
-            root
-        } else {
-            let entry = root
-                .lookup_entry_by_path(path)
-                .map_err(Error::git)?
-                .filter(|entry| entry.mode().is_tree())
-                .ok_or_else(|| Error::PathNotFound(path.to_owned()))?;
-            entry.object().map_err(Error::git)?.try_into_tree().map_err(Error::git)?
-        };
-
-        tree.iter()
-            .map(|entry| {
-                let entry = entry.map_err(Error::git)?;
-                Ok(Self {
-                    name: entry.filename().to_string(),
-                    kind: kind_name(entry.mode().kind()),
-                    id: entry.oid().to_string(),
-                })
-            })
-            .collect()
-    }
-}
-
-/// The raw contents of the file at `path` in `rev`.
-pub fn read_blob(repo: &gix::Repository, rev: Option<&str>, path: &str) -> Result<Vec<u8>> {
-    let root = commit_for(repo, rev)?.tree().map_err(Error::git)?;
-    let entry = root
-        .lookup_entry_by_path(path)
-        .map_err(Error::git)?
-        .filter(|entry| entry.mode().is_blob())
-        .ok_or_else(|| Error::PathNotFound(path.to_owned()))?;
-    let blob = entry.object().map_err(Error::git)?;
-    Ok(blob.detach().data)
-}
-
-fn commit_for<'repo>(repo: &'repo gix::Repository, rev: Option<&str>) -> Result<gix::Commit<'repo>> {
+/// The commit `rev` names, and what kind of ref named it.
+pub(crate) fn commit_for<'repo>(
+    repo: &'repo gix::Repository,
+    rev: Option<&str>,
+) -> Result<(RefTarget, gix::Commit<'repo>)> {
     let target = resolve_ref(repo, rev)?;
     let id = ObjectId::from_hex(target.commit.as_bytes()).map_err(Error::git)?;
-    repo.find_commit(id).map_err(Error::git)
-}
-
-fn kind_name(kind: EntryKind) -> &'static str {
-    match kind {
-        EntryKind::Tree => "tree",
-        EntryKind::Blob => "blob",
-        EntryKind::BlobExecutable => "executable",
-        EntryKind::Link => "symlink",
-        EntryKind::Commit => "submodule",
-    }
+    let commit = repo.find_commit(id).map_err(Error::git)?;
+    Ok((target, commit))
 }
 
 #[cfg(test)]
 mod tests {
+
     use gix::refs::transaction::PreviousValue;
 
     use super::*;
 
-    /// A bare repository built in-process, with commits at chosen times.
-    struct Fixture {
-        _dir: tempfile::TempDir,
-        repo: gix::Repository,
+    use crate::fixture::Fixture;
+
+    trait Log {
+        fn log(&self, rev: Option<&str>, path: &str, cursor: Option<&str>, limit: usize) -> Page<CommitInfo>;
     }
 
-    impl Fixture {
-        fn new() -> Self {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("r.git");
-            gix::init_bare(&path).unwrap();
-            std::fs::write(path.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-            let repo = gix::open(&path).unwrap();
-            Self { _dir: dir, repo }
-        }
-
-        /// A commit on `branch` setting `files` on top of `parents[0]`'s tree.
-        fn commit(
-            &self,
-            branch: &str,
-            parents: &[ObjectId],
-            files: &[(&str, &str)],
-            message: &str,
-            time: &str,
-        ) -> ObjectId {
-            let base = match parents.first() {
-                Some(&parent) => self.repo.find_commit(parent).unwrap().tree_id().unwrap().detach(),
-                None => ObjectId::empty_tree(self.repo.object_hash()),
-            };
-            let mut editor = self.repo.edit_tree(base).unwrap();
-            for (path, content) in files {
-                let blob = self.repo.write_blob(content).unwrap();
-                editor.upsert(*path, EntryKind::Blob, blob).unwrap();
-            }
-            let tree = editor.write().unwrap();
-            let who = gix::actor::SignatureRef { name: "Ann".into(), email: "ann@example.com".into(), time };
-            let commit = self.repo.new_commit_as(who, who, message, tree, parents.iter().copied()).unwrap();
-            let id = commit.id;
-            self.repo.reference(format!("refs/heads/{branch}"), id, PreviousValue::Any, "test").unwrap();
-            id
-        }
-
+    impl Log for Fixture {
         fn log(&self, rev: Option<&str>, path: &str, cursor: Option<&str>, limit: usize) -> Page<CommitInfo> {
             log(&self.repo, rev, path, cursor, limit).unwrap()
         }

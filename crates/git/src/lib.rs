@@ -4,14 +4,23 @@
 //! This crate only touches repositories on disk, addressed by ID. It knows
 //! nothing about names, owners or users; those live in `klotho-core`.
 
+mod blob;
 mod browse;
+mod contents;
 mod error;
+#[cfg(test)]
+mod fixture;
 pub mod protocol;
 mod store;
 
+pub use blob::BlobReader;
 pub use browse::{
     Annotation, BranchInfo, CommitInfo, GitTime, Page, RefKind, RefTarget, RepoInfo, Resolved, Signature,
-    TagInfo, TreeEntryInfo, branch, branches, log, read_blob, resolve, resolve_ref, tag, tags,
+    TagInfo, branch, branches, log, resolve, resolve_ref, tag, tags,
+};
+pub use contents::{
+    Contents, DirListing, EntryType, FileInfo, LinkInfo, SubmoduleInfo, TEXT_LIMIT, TreeEntry, contents,
+    open_file, readme,
 };
 pub use error::{Error, Result};
 pub use store::{RepoId, RepoStore};

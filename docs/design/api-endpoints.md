@@ -251,3 +251,5 @@ Rendered on the server by `klotho-web` (FR-UI-050), each with its own title and 
 | `/{repo}/info/refs` etc. | `/{o}/{r}/info/refs` etc. | Owner added; authentication added |
 
 **Status after Phase 1.** The API is at `/api/v1` and owner-scoped, and git transport is at `/{o}/{r}`. The three browsing endpoints moved as they were, keeping their old query parameters for now: `/api/v1/repos/{o}/{r}/commits?rev=&limit=`, `/tree?rev=&path=` and `/raw?rev=&path=` (`raw` already sends `nosniff`). Phase 3 replaces them with the shapes above.
+
+**Status during Phase 3.** `klotho-core` now has the read services behind the P3 rows. Until the endpoints above exist, the old ones call them: `/commits?rev=&path=&cursor=&limit=` returns the new commit shape (RFC 3339 dates with their offset) but no next cursor; `/tree?rev=&path=&cursor=&limit=` returns the `Contents` shape, a paged directory listing with `next` in the body, or a file, symlink or submodule; and `/raw?rev=&path=` streams, with `Content-Length` and `nosniff`. `contents/{*path}?ref=`, `raw/{*path}?ref=`, `readme`, `resolve`, `branches` and `tags` are still to come.
