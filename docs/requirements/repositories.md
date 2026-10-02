@@ -53,11 +53,14 @@
 
 ## Conflicts with the current implementation
 
-Checked after Phase 1 (2026-10-01).
+Checked after Phase 2 (2026-10-02).
 
 | Requirement | Current behaviour | Where |
 |---|---|---|
-| FR-REPO-001 (only authorised users create) | **Conflict.** Repositories are created through `POST /api/v1/admin/users/{username}/repos`, which has no authentication until Phase 2, so anyone who can reach the server can create them. | [api.rs](../../crates/server/src/api.rs) (`create_repo`) |
 | FR-REPO-003 (configurable default branch) | **Conflict.** The default branch is the compile-time constant `main`. It matches FR-REPO-002 but can't be changed (Phase 6). | [store.rs](../../crates/git/src/store.rs) (`DEFAULT_BRANCH`) |
 
-Met today: FR-REPO-002 (HEAD points at `main`) and FR-REPO-035 (unadopted repositories can be adopted under an owner, moving them to their ID-based path, or deleted; through `klotho admin` and the API).
+Met today:
+- FR-REPO-001: users create repositories under their own name (`POST /api/v1/user/repos`, `repo:admin` scope); administrators under anyone's (`POST /api/v1/admin/users/{username}/repos`).
+- FR-REPO-002: HEAD points at `main`.
+- FR-REPO-010: `private` is chosen at creation (default public) and changed with `PATCH /api/v1/repos/{owner}/{repo}`, which needs admin level. Adopted repositories start private.
+- FR-REPO-035: unadopted repositories can be adopted under an owner, moving them to their ID-based path, or deleted; through `klotho admin` and the admin API.

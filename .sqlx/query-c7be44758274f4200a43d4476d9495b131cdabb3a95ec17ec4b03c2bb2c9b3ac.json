@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT expires_at FROM one_time_tokens WHERE token_hash = ? AND purpose = 'invite' AND used_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "expires_at",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "one_time_tokens",
+            "name": "expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c7be44758274f4200a43d4476d9495b131cdabb3a95ec17ec4b03c2bb2c9b3ac"
+}

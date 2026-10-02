@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use klotho_core::Error;
 use serde_json::json;
@@ -24,6 +24,11 @@ impl ApiError {
         Self::new(StatusCode::NOT_FOUND, "not_found", "not found")
     }
 
+    /// `401` with a `WWW-Authenticate: Bearer` challenge.
+    pub fn unauthenticated(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, "unauthenticated", message)
+    }
+
     fn internal(err: &dyn std::fmt::Debug) -> Self {
         tracing::error!(error = ?err, "request failed");
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "internal server error")
@@ -32,7 +37,12 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(json!({ "code": self.code, "message": self.message }))).into_response()
+        let body = Json(json!({ "code": self.code, "message": self.message }));
+        if self.status == StatusCode::UNAUTHORIZED {
+            return (self.status, [(header::WWW_AUTHENTICATE, "Bearer realm=\"Klotho\"")], body)
+                .into_response();
+        }
+        (self.status, body).into_response()
     }
 }
 
@@ -42,10 +52,18 @@ impl From<Error> for ApiError {
         let (status, code) = match &err {
             Error::InvalidName(_) => (S::BAD_REQUEST, "name_invalid"),
             Error::OwnerNotFound(_) => (S::NOT_FOUND, "owner_not_found"),
+            // The same for a private repository the caller can't see (FR-ACL-013).
             Error::RepoNotFound(_) => (S::NOT_FOUND, "repo_not_found"),
             Error::NotUnadopted(_) => (S::NOT_FOUND, "unadopted_not_found"),
+            Error::TokenNotFound => (S::NOT_FOUND, "token_not_found"),
             Error::OwnerExists(_) => (S::CONFLICT, "owner_exists"),
             Error::RepoExists(_) => (S::CONFLICT, "repo_exists"),
+            Error::EmailExists => (S::CONFLICT, "email_exists"),
+            Error::InvalidInput(_) => (S::UNPROCESSABLE_ENTITY, "invalid"),
+            Error::InvalidCredentials => (S::UNAUTHORIZED, "unauthenticated"),
+            Error::Forbidden => (S::FORBIDDEN, "forbidden"),
+            Error::RegistrationClosed => (S::FORBIDDEN, "registration_closed"),
+            Error::InvalidInvite => (S::BAD_REQUEST, "invite_invalid"),
             Error::Git(klotho_git::Error::RevisionNotFound(_)) => (S::NOT_FOUND, "revision_not_found"),
             Error::Git(klotho_git::Error::PathNotFound(_)) => (S::NOT_FOUND, "path_not_found"),
             _ => return Self::internal(&err),

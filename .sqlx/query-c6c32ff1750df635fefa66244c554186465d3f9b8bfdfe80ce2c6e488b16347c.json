@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT r.id AS \"id!\", r.name, r.created_at, o.id AS \"owner_id!\", o.name AS owner_name, o.kind AS owner_kind\n               FROM repositories r JOIN owners o ON o.id = r.owner_id ORDER BY r.id",
+  "query": "SELECT r.id AS \"id!\", r.name, r.created_at, r.private AS \"private: bool\", o.id AS \"owner_id!\", o.name AS owner_name, o.kind AS owner_kind\n               FROM repositories r JOIN owners o ON o.id = r.owner_id ORDER BY r.id",
   "describe": {
     "columns": [
       {
@@ -37,8 +37,19 @@
         }
       },
       {
-        "name": "owner_id!",
+        "name": "private: bool",
         "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "repositories",
+            "name": "private"
+          }
+        }
+      },
+      {
+        "name": "owner_id!",
+        "ordinal": 4,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -49,7 +60,7 @@
       },
       {
         "name": "owner_name",
-        "ordinal": 4,
+        "ordinal": 5,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -60,7 +71,7 @@
       },
       {
         "name": "owner_kind",
-        "ordinal": 5,
+        "ordinal": 6,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -79,8 +90,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "bdb2951869b46832430e791e611e989fb2e9c9fd8d41efe43d7a6b7089238b50"
+  "hash": "c6c32ff1750df635fefa66244c554186465d3f9b8bfdfe80ce2c6e488b16347c"
 }

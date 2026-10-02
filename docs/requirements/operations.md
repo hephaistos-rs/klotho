@@ -48,7 +48,7 @@ Checked against the Phase 0 work (2026-10-01).
 
 | Requirement | Current behaviour | Where |
 |---|---|---|
-| NFR-OPS-012 (loopback by default) | **Conflict.** The default address is `0.0.0.0:3000`, changed on purpose in `e7f0061`. Until authentication exists (Phase 2), anyone who can reach the port can push. | [config.rs](../../crates/core/src/config.rs) (`ServerConfig::default`) |
+| NFR-OPS-012 (loopback by default) | **Conflict.** The default address is `0.0.0.0:3000`, changed on purpose in `e7f0061`. Since Phase 2 pushing needs a token, but the sign-in page and public repositories are reachable from the network by default. | [config.rs](../../crates/core/src/config.rs) (`ServerConfig::default`) |
 | NFR-OPS-020 (structured logs, request IDs) | **Partial.** Every request gets an `X-Request-Id` that appears in its log span, but logs are plain text. JSON output comes in Phase 10. | [lib.rs](../../crates/server/src/lib.rs) (`build_app`) |
 
 Met today: NFR-OPS-001 (one binary; since Phase 1b it doesn't need `git` either), NFR-OPS-010 and 011 (TOML config with `KLOTHO_SECTION__KEY` overrides, unknown keys rejected by name), NFR-OPS-013 (`klotho.example.toml`, checked by a test), NFR-OPS-022 (liveness at `/-/health`; readiness comes with the database in Phase 1) and NFR-OPS-030 (graceful shutdown with a grace period).

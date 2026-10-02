@@ -5,5 +5,9 @@
 # Resolved against this file's folder, so it's <repository root>/testRepos.
 data_dir = "testRepos"
 
+[auth]
+# Anyone can sign up on a development server.
+registration = "open"
+
 [log]
 filter = "klotho=debug,tower_http=debug"

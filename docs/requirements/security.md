@@ -60,13 +60,17 @@
 
 ## Conflicts with the current implementation
 
-Checked against commit `6b4895f`.
+Checked after Phase 2 (2026-10-02).
 
 | Requirement | Current behaviour | Where |
 |---|---|---|
-| NFR-SEC-010 (safe raw content) | **Partial.** Raw blobs are served as `application/octet-stream`, which is the right idea, but without `X-Content-Type-Options: nosniff`. | [api.rs:102-111](../../crates/server/src/api.rs#L102-L111) |
 | NFR-SEC-020 (body size limits) | **Partial.** `/api` has a configurable limit (default 1 MiB, `413` above it). The body limit is still turned off for git routes with no replacement, so a single push can be as large as the disk allows. | [git_http.rs](../../crates/server/src/git_http.rs) (`router`) |
 | NFR-SEC-022 (cap on concurrent packs) | **Conflict.** Every clone, fetch and push runs on the blocking pool with no limit of its own (Phase 4 adds the semaphore). | [git_http.rs](../../crates/server/src/git_http.rs) (`upload_pack`, `receive_pack`) |
 | NFR-SEC-023 (timeouts, stop on disconnect) | **Partial.** A fetch stops building its pack as soon as a write to the gone client fails, and a push cut off mid-pack fails while indexing and leaves nothing behind. There's no wall-clock timeout on git requests yet. | [git_http.rs](../../crates/server/src/git_http.rs) (`ChannelWriter`) |
 
-Met today: NFR-SEC-030 (500 responses say only "internal server error" and the details are logged; [error.rs:28-36](../../crates/server/src/error.rs#L28-L36)). Since Phase 1b (2026-10-02) Klotho starts no subprocesses, so the old subprocess rules (NFR-SEC-040, 041) are withdrawn.
+Met today:
+- NFR-SEC-010: raw file contents are `application/octet-stream` with `X-Content-Type-Options: nosniff`.
+- NFR-SEC-013: only web pages accept the session cookie, it's `SameSite=Lax`, and Topcoat's origin check rejects cross-site and same-site (other subdomain) state-changing requests with `403`. `a_cross_site_form_post_with_the_session_cookie_is_refused` keeps a Topcoat upgrade from turning that off. The API ignores cookies entirely.
+- NFR-SEC-030: 500 responses say only "internal server error" and the details are logged ([error.rs](../../crates/server/src/error.rs)).
+
+Since Phase 1b (2026-10-02) Klotho starts no subprocesses, so the old subprocess rules (NFR-SEC-040, 041) are withdrawn.

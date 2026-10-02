@@ -3,6 +3,7 @@
 
 mod api;
 mod assets;
+mod auth;
 mod error;
 mod git_http;
 
@@ -63,7 +64,7 @@ pub fn build_app(state: AppState, config: &ServerConfig) -> Router {
 
     let api = api::router().layer(RequestBodyLimitLayer::new(config.api_body_limit)).layer(timeout);
     let ops = Router::new().route("/-/health", get(health)).route("/-/ready", get(ready)).layer(timeout);
-    let web = assets::router().layer(timeout);
+    let web = assets::router(state.core.clone()).layer(timeout);
 
     Router::new().nest("/api", api).merge(ops).merge(git_http::router()).merge(web).with_state(state).layer(
         ServiceBuilder::new()

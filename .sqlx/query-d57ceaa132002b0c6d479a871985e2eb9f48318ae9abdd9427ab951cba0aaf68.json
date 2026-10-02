@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "INSERT INTO users (id) VALUES (?)",
+  "query": "DELETE FROM sessions WHERE id_hash = ?",
   "describe": {
     "columns": [],
     "parameters": {
@@ -8,5 +8,5 @@
     },
     "nullable": []
   },
-  "hash": "ad3d1fc9592ce461a29b7e3afc23558e430b98cbd628ad75ac09b44773406914"
+  "hash": "d57ceaa132002b0c6d479a871985e2eb9f48318ae9abdd9427ab951cba0aaf68"
 }

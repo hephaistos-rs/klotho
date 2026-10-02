@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO one_time_tokens (token_hash, purpose, created_at, expires_at) VALUES (?, 'invite', ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "e4b45cd564a8c9fc2de2a982b40108b6d4d3129759299dde0cf4a272960d4cad"
+}

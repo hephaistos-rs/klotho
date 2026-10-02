@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use klotho_core::{Core, Urls};
+use klotho_core::{Core, NewUser, Urls};
 use klotho_server::AppState;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
@@ -35,8 +35,21 @@ enum Command {
 
 #[derive(Subcommand)]
 enum Admin {
-    /// Create a user.
-    CreateUser { username: String },
+    /// Create an account. Asks for its password unless `--password-stdin` is given.
+    /// The first administrator is made this way (FR-AUTH-003).
+    CreateUser {
+        username: String,
+        #[arg(long)]
+        email: Option<String>,
+        /// Make it an instance administrator.
+        #[arg(long)]
+        admin: bool,
+        /// Read the password from the first line of stdin, for scripts.
+        #[arg(long)]
+        password_stdin: bool,
+    },
+    /// Print a single-use sign-up link, for `auth.registration = "invite"`.
+    Invite,
     /// List repositories on disk that aren't registered, and registered ones whose
     /// directory is missing.
     Unadopted,
@@ -78,16 +91,36 @@ async fn open_core(loaded: &config::Loaded) -> anyhow::Result<Core> {
         files = %paths.files.display(),
         "data locations"
     );
-    Core::open(&paths, urls)
+    Core::open(&paths, urls, loaded.config.auth.clone())
         .await
         .with_context(|| format!("can't open the data in {}", paths.data_dir.display()))
 }
 
 async fn run_admin(core: Core, admin: Admin) -> anyhow::Result<()> {
     match admin {
-        Admin::CreateUser { username } => {
-            let user = core.create_user(&username).await?;
-            println!("created user {} (id {})", user.name, user.id);
+        Admin::CreateUser { username, email, admin, password_stdin } => {
+            let password = if password_stdin {
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line).context("can't read the password from stdin")?;
+                line.trim_end_matches(['\r', '\n']).to_owned()
+            } else {
+                let password = rpassword::prompt_password(format!("Password for {username}: "))?;
+                if rpassword::prompt_password("Again: ")? != password {
+                    anyhow::bail!("the passwords don't match");
+                }
+                password
+            };
+            let new =
+                NewUser { username: &username, email: email.as_deref(), password: Some(&password), admin };
+            let user = core.create_user(new).await?;
+            let role = if user.is_admin { "administrator" } else { "user" };
+            println!("created {role} {} (id {})", user.username, user.id);
+        }
+        Admin::Invite => {
+            let secret = core.create_invite().await?;
+            let days = klotho_core::INVITE_LIFETIME.as_secs() / (24 * 60 * 60);
+            println!("{}", core.urls().absolute(&format!("/-/register?invite={secret}")));
+            println!("The link works once, for {days} days, while registration is set to \"invite\".");
         }
         Admin::Unadopted => {
             let report = core.storage_report().await?;

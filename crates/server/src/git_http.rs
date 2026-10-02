@@ -8,7 +8,9 @@
 //!
 //! See <https://git-scm.com/docs/http-protocol>.
 //!
-//! TODO: there is no authentication yet, so anyone who can reach the server can push.
+//! Every request is authorized with `klotho-core`'s `repo_for`: reading for
+//! clone and fetch, writing for push (FR-ACL-050). Anonymous requests that need
+//! more get a `401` challenge so git asks for a token (FR-AUTH-023).
 
 use std::io::{self, BufReader, BufWriter, Write};
 use std::pin::Pin;
@@ -23,7 +25,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use futures_util::TryStreamExt;
-use klotho_core::Core;
+use klotho_core::{Action, Actor, Core, Error, Repo};
 use klotho_git::protocol::{self, ReceiveHooks, RefUpdate};
 use serde::Deserialize;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -32,6 +34,7 @@ use tokio_util::io::{StreamReader, SyncIoBridge};
 use tokio_util::task::TaskTracker;
 
 use crate::AppState;
+use crate::auth::{challenge, git_actor};
 use crate::error::ApiError;
 
 /// Largest fetch request body accepted. Requests carry `want`/`have` lines, a
@@ -102,7 +105,11 @@ async fn info_refs(
         Some("git-receive-pack") => Service::ReceivePack,
         _ => return Ok((StatusCode::FORBIDDEN, "only the smart HTTP protocol is supported").into_response()),
     };
-    let repo = core.find_repo(&owner, &repo).await?;
+    let action = if service == Service::ReceivePack { Action::Write } else { Action::Read };
+    let repo = match authorized_repo(&core, &headers, &owner, &repo, action).await {
+        Ok(repo) => repo,
+        Err(response) => return Ok(*response),
+    };
     // Git has no v2 for pushing; a v2 client falls back to v0 when it gets a v0 answer.
     let version = match (service, protocol_version(&headers)) {
         (Service::ReceivePack, Version::V2) => Version::V0,
@@ -146,7 +153,10 @@ async fn upload_pack(
     if !has_content_type(&headers, Service::UploadPack) {
         return Ok(StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response());
     }
-    let repo = core.find_repo(&owner, &repo).await?;
+    let repo = match authorized_repo(&core, &headers, &owner, &repo, Action::Read).await {
+        Ok(repo) => repo,
+        Err(response) => return Ok(*response),
+    };
     let mut request = Vec::new();
     request_reader(&headers, body).take(MAX_FETCH_REQUEST + 1).read_to_end(&mut request).await?;
     if request.len() as u64 > MAX_FETCH_REQUEST {
@@ -195,7 +205,10 @@ async fn receive_pack(
     if !has_content_type(&headers, Service::ReceivePack) {
         return Ok(StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response());
     }
-    let repo = core.find_repo(&owner, &repo).await?;
+    let repo = match authorized_repo(&core, &headers, &owner, &repo, Action::Write).await {
+        Ok(repo) => repo,
+        Err(response) => return Ok(*response),
+    };
     let mut input = BufReader::with_capacity(64 * 1024, SyncIoBridge::new(request_reader(&headers, body)));
     let store = core.store().clone();
     let report = git_tasks
@@ -218,8 +231,37 @@ async fn receive_pack(
     Ok(git_response("application/x-git-receive-pack-result", Body::from(report)))
 }
 
-/// Klotho's checks around a push. Phase 2 adds authorization to `pre_receive`;
-/// `post_receive` is where webhooks and other events will start.
+/// The repository, if the request's credentials allow `action` on it. Otherwise
+/// the response to send:
+/// - anonymous, and either the repository is invisible or the action needs
+///   more: `401` with a challenge, so git asks for a token;
+/// - signed in but can't see it: `404`, the same as a missing repository
+///   (FR-ACL-013);
+/// - can see it but not do `action`: `403`.
+async fn authorized_repo(
+    core: &Core,
+    headers: &HeaderMap,
+    owner: &str,
+    name: &str,
+    action: Action,
+) -> Result<Repo, Box<Response>> {
+    let actor = git_actor(core, headers).await?;
+    match core.repo_for(&actor, owner, name, action).await {
+        Ok(repo) => Ok(repo),
+        Err(Error::RepoNotFound(_) | Error::Forbidden) if actor == Actor::Anonymous => {
+            Err(Box::new(challenge()))
+        }
+        Err(Error::Forbidden) => Err(Box::new(
+            (StatusCode::FORBIDDEN, "You don't have permission to push here.\n").into_response(),
+        )),
+        Err(err) => Err(Box::new(ApiError::from(err).into_response())),
+    }
+}
+
+/// Klotho's checks around a push. Who may push at all is decided before the
+/// push is read (`authorized_repo`); `pre_receive` is where per-ref rules such
+/// as branch protection go. `post_receive` is where webhooks and other events
+/// will start.
 struct PushHooks;
 
 impl ReceiveHooks for PushHooks {

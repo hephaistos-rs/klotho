@@ -290,27 +290,36 @@ Phases run in order: 0, 1, 1b, 2 and onwards. Phase 1b (the native git transport
 
 **Goal:** close the critical conflict. Nobody can push without permission.
 
-- Users and registration modes, with the first admin created by `klotho admin create-user --admin` (FR-AUTH-003).
-- Passwords (Argon2id), the `sessions` table, and `topcoat::session` for the `__Host-` cookie. Login, register and logout pages in `klotho-web` (plain forms, no JavaScript needed).
-- Topcoat's origin check, plus a test that keeps it on, as in [auth-flows.md](docs/design/auth-flows.md). The API ignores the cookie and accepts bearer tokens only.
-- Personal access tokens: format, SHA-256 storage, scopes.
-- Git HTTP Basic auth with the `401` challenge.
-- `authorize(actor, repo, action)` in `klotho-core`, used by **every** handler.
-- Visibility public/private, with 404 for no access.
-- Rename the API to `/api/v1`, and add `/user`, `/user/tokens` (list and revoke) and `/instance`. Token creation is the `/-/settings/tokens` page.
+**Status:** done (2026-10-02).
+
+- ~~Users and registration modes, with the first admin created by `klotho admin create-user --admin` (FR-AUTH-003).~~ `auth.registration` is `open`, `invite` or `disabled` (the default); `klotho admin invite` prints a single-use sign-up link.
+- ~~Passwords (Argon2id), the `sessions` table, and `topcoat::session` for the `__Host-` cookie. Login, register and logout pages in `klotho-web` (plain forms, no JavaScript needed).~~ The cookie is `__Host-` and `Secure` when `server.public_url` is HTTPS, and plain `klotho_session` over HTTP for localhost development.
+- ~~Topcoat's origin check, plus a test that keeps it on, as in [auth-flows.md](docs/design/auth-flows.md). The API ignores the cookie and accepts bearer tokens only.~~
+- ~~Personal access tokens: format, SHA-256 storage, scopes.~~
+- ~~Git HTTP Basic auth with the `401` challenge.~~
+- ~~`authorize(actor, repo, action)` in `klotho-core`, used by **every** handler.~~ `klotho_core::access::authorize`, reached through `Core::repo_for` and `list_repos`.
+- ~~Visibility public/private, with 404 for no access.~~ Set at creation and with `PATCH /api/v1/repos/{owner}/{repo}`; adopted repositories start private.
+- ~~Rename the API to `/api/v1`, and add `/user`, `/user/tokens` (list and revoke) and `/instance`. Token creation is the `/-/settings/tokens` page.~~ Also `POST /user/repos`, so users can create their own repositories.
+- Tests: the `authorize` table and account tests in `klotho-core`; `crates/server/tests/auth.rs` for the web, API and git flows.
 
 **Requirements:** FR-AUTH-001–003, 010–013, 020, 022, 023, 040, 041, 045; FR-ACL-001, 003, 004, 007, 010, 011, 013, 030, 050; FR-REPO-010; NFR-SEC-013.
 
 **Done when:**
-- [ ] Anonymous `git push` gets a credential prompt, and a wrong token is rejected.
-- [ ] A private repository gives an identical `404` to a stranger and for a repository that doesn't exist.
-- [ ] A form `POST` with the session cookie but `Sec-Fetch-Site: cross-site` gets `403`.
-- [ ] A request to `/api/v1/user` with only the session cookie gets `401`.
-- [ ] A token without `repo:write` can clone but not push.
+- [x] Anonymous `git push` gets a credential prompt, and a wrong token is rejected. (`git_asks_anonymous_pushers_for_credentials_and_rejects_wrong_ones`)
+- [x] A private repository gives an identical `404` to a stranger and for a repository that doesn't exist. (`a_private_repository_looks_exactly_like_a_missing_one`, and over git `strangers_get_not_found_from_git_for_private_repositories`)
+- [x] A form `POST` with the session cookie but `Sec-Fetch-Site: cross-site` gets `403`. (`a_cross_site_form_post_with_the_session_cookie_is_refused`)
+- [x] A request to `/api/v1/user` with only the session cookie gets `401`. (`the_api_ignores_the_session_cookie`)
+- [x] A token without `repo:write` can clone but not push. (`a_read_only_token_clones_but_cannot_push`)
 
 > **Guide notes.**
 > - Write `authorize()` as a pure function over `(actor, repo_facts, action)` and unit-test it with a table of cases. It's the single most important function in Klotho.
 > - Make "no access" and "not found" the same error variant *inside* core, so a handler can't accidentally tell them apart.
+> - **Learned in Phase 2:**
+>   - `list_repos` asks `authorize` whether the caller may read the owner's private repositories, instead of repeating the rule in SQL, so a listing can't disagree with opening a repository.
+>   - Anonymous git requests for a private (or missing) repository get the `401` challenge, not `404`: git only sends credentials after a challenge, so a `404` would stop a legitimate owner from ever cloning.
+>   - Topcoat's `view!` only works inside components (or with `view! { cx => … }`), and views render after the handler returns, so components take owned values.
+>   - Without an asset bundle, `tailwind::stylesheet!()` panics. The layout now links the stylesheet only when the bundle has it, so tests (and a binary started without its bundle) get working, unstyled pages instead of a `503`.
+>   - Not done here and still open: throttling failed sign-ins (FR-AUTH-043) and listing sessions (FR-AUTH-042), both Phase 5.
 
 ### Phase 3: API v1 and the web app
 

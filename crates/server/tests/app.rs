@@ -8,6 +8,7 @@ use std::time::Duration;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use axum::response::Response;
+use klotho_core::Scope;
 use klotho_core::config::ServerConfig;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -85,7 +86,13 @@ async fn repository_resource_has_the_fr_api_010_fields() {
 #[tokio::test]
 async fn creating_keeps_the_display_name_and_rejects_reserved_suffixes() {
     let (_dir, state) = common::state().await;
+    let token = common::token(&state.core, "root", &[Scope::Admin]).await;
     let app = klotho_server::build_app(state, &ServerConfig::default());
+    let post = |uri: &str, body: Value| {
+        let mut request = post(uri, body);
+        request.headers_mut().insert("authorization", format!("Bearer {token}").parse().unwrap());
+        request
+    };
 
     let created = app.clone().oneshot(post("/api/v1/admin/users/alice/repos", json!({ "name": "MyRepo" })));
     let response = created.await.unwrap();
@@ -116,7 +123,7 @@ async fn missing_repositories_and_owners_are_404_with_a_code() {
 async fn listing_is_paged_with_a_link_header() {
     let (_dir, state) = common::state().await;
     for name in ["b", "c"] {
-        state.core.create_repo("alice", name).await.unwrap();
+        state.core.create_repo("alice", name, false).await.unwrap();
     }
     let app = klotho_server::build_app(state, &ServerConfig::default());
 

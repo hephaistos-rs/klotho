@@ -11,6 +11,7 @@ klotho-core.workspace = true
 klotho-git.workspace = true
 klotho-server.workspace = true
 anyhow.workspace = true
+rpassword.workspace = true
 clap.workspace = true
 figment.workspace = true
 tokio = { workspace = true, features = ["full"] }

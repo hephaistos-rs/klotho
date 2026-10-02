@@ -113,12 +113,13 @@ async fn an_atomic_push_with_one_rejected_ref_changes_nothing() {
     .await;
 }
 
-/// Sends a raw `git-receive-pack` request and returns the whole HTTP response.
-async fn receive_pack_request(addr: std::net::SocketAddr, body: &[u8]) -> String {
-    let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
+/// Sends a raw `git-receive-pack` request as alice and returns the whole HTTP response.
+async fn receive_pack_request(running: &common::Running, body: &[u8]) -> String {
+    let mut conn = tokio::net::TcpStream::connect(running.addr).await.unwrap();
     let head = format!(
-        "POST /alice/demo.git/git-receive-pack HTTP/1.1\r\nHost: x\r\n\
+        "POST /alice/demo.git/git-receive-pack HTTP/1.1\r\nHost: x\r\nAuthorization: {}\r\n\
          Content-Type: application/x-git-receive-pack-request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        running.basic_auth(),
         body.len()
     );
     conn.write_all(head.as_bytes()).await.unwrap();
@@ -173,7 +174,7 @@ async fn a_pack_missing_objects_is_rejected_and_never_stored() {
     let mut body = pkt(&format!("{zero} {commit} refs/heads/broken\0report-status side-band-64k"));
     body.extend(b"0000");
     body.extend(&pack);
-    let response = receive_pack_request(running.addr, &body).await;
+    let response = receive_pack_request(&running, &body).await;
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     assert!(response.contains("ng refs/heads/broken missing necessary objects"), "{response}");
     assert!(response.contains(&format!("object {tree} is missing (needed by {commit})")), "{response}");
@@ -209,8 +210,9 @@ async fn an_interrupted_push_leaves_nothing_behind() {
     body.extend(&pack[..pack.len() / 2]);
     let mut conn = tokio::net::TcpStream::connect(running.addr).await.unwrap();
     let head = format!(
-        "POST /alice/demo.git/git-receive-pack HTTP/1.1\r\nHost: x\r\n\
+        "POST /alice/demo.git/git-receive-pack HTTP/1.1\r\nHost: x\r\nAuthorization: {}\r\n\
          Content-Type: application/x-git-receive-pack-request\r\nContent-Length: {}\r\n\r\n",
+        running.basic_auth(),
         body.len() + pack.len()
     );
     conn.write_all(head.as_bytes()).await.unwrap();

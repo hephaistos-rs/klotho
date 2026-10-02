@@ -9,9 +9,12 @@ publish.workspace = true
 [dependencies]
 serde.workspace = true
 gix.workspace = true
+argon2.workspace = true
+getrandom.workspace = true
 jiff.workspace = true
 klotho-git.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt"] }

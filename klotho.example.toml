@@ -36,6 +36,15 @@ data_dir = "data"
 # database = "<data_dir>/klotho.db"          # SQLite metadata
 # files = "<data_dir>/files"                 # LFS objects, release assets, avatars
 
+[auth]
+# Who can create an account: "open" (anyone), "invite" (only with a link from
+# `klotho admin invite`) or "disabled" (only `klotho admin create-user`).
+registration = "disabled"
+# A web session ends after this many days without use…
+session_idle_days = 14
+# …and after this many days in any case.
+session_max_days = 90
+
 [log]
 # Which log messages to show, as a tracing filter: a level ("info"), or
 # comma-separated target=level pairs. The RUST_LOG environment variable, if set,

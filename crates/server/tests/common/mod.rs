@@ -7,31 +7,52 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use klotho_core::config::{ServerConfig, StorageConfig};
-use klotho_core::{Core, Urls};
+use klotho_core::config::{AuthConfig, ServerConfig, StorageConfig};
+use klotho_core::{Core, NewUser, Scope, Scopes, Urls};
 use klotho_server::AppState;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-/// App state on a fresh data directory, with user `alice` and her repository `demo`.
+pub const ALICE_PASSWORD: &str = "alice's password";
+
+/// App state on a fresh data directory, with administrator `root`, user
+/// `alice` (password [`ALICE_PASSWORD`]) and her public repository `demo`.
 pub async fn state() -> (tempfile::TempDir, AppState) {
-    state_with_url("http://localhost:3000").await
+    state_with(AuthConfig::default(), "http://localhost:3000").await
 }
 
-pub async fn state_with_url(public_url: &str) -> (tempfile::TempDir, AppState) {
+pub async fn state_with(auth: AuthConfig, public_url: &str) -> (tempfile::TempDir, AppState) {
     let dir = tempfile::tempdir().unwrap();
     let paths = StorageConfig::default().resolve(dir.path());
-    let core = Core::open(&paths, Urls::new(public_url).unwrap()).await.unwrap();
-    core.create_user("alice").await.unwrap();
-    core.create_repo("alice", "demo").await.unwrap();
+    let core = Core::open(&paths, Urls::new(public_url).unwrap(), auth).await.unwrap();
+    core.create_user(NewUser { admin: true, ..NewUser::named("root") }).await.unwrap();
+    let alice = NewUser {
+        password: Some(ALICE_PASSWORD),
+        email: Some("alice@example.com"),
+        ..NewUser::named("alice")
+    };
+    core.create_user(alice).await.unwrap();
+    core.create_repo("alice", "demo", false).await.unwrap();
     (dir, AppState::new(core))
 }
+
+/// A new token for `username` with `scopes`.
+pub async fn token(core: &Core, username: &str, scopes: &[Scope]) -> String {
+    let user = core.find_user(username).await.unwrap();
+    core.create_token(&user, "test", Scopes::new(scopes.iter().copied()), None).await.unwrap().secret
+}
+
+/// Every scope a user has: what a test acting as that user needs.
+pub const ALL_REPO_AND_USER: &[Scope] =
+    &[Scope::RepoRead, Scope::RepoWrite, Scope::RepoAdmin, Scope::UserRead, Scope::UserWrite];
 
 /// A server running on a free port.
 pub struct Running {
     pub addr: SocketAddr,
     pub core: Core,
+    /// alice's token, with every repository and user scope.
+    pub token: String,
     /// Starts graceful shutdown.
     pub stop: oneshot::Sender<()>,
     /// Ends when the server has stopped.
@@ -40,16 +61,41 @@ pub struct Running {
 }
 
 impl Running {
+    /// A URL that signs git in as alice, with her token as the password.
     pub fn url(&self, path: &str) -> String {
+        format!("http://alice:{}@{}{path}", self.token, self.addr)
+    }
+
+    /// A URL without credentials.
+    pub fn anonymous_url(&self, path: &str) -> String {
         format!("http://{}{path}", self.addr)
+    }
+
+    /// An `Authorization` header value signing in as alice, for raw requests.
+    pub fn basic_auth(&self) -> String {
+        const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let input = format!("alice:{}", self.token).into_bytes();
+        let mut out = String::from("Basic ");
+        for chunk in input.chunks(3) {
+            let n = chunk.iter().enumerate().fold(0u32, |n, (i, &b)| n | (u32::from(b) << (16 - 8 * i)));
+            for i in 0..4 {
+                if i <= chunk.len() {
+                    out.push(ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char);
+                } else {
+                    out.push('=');
+                }
+            }
+        }
+        out
     }
 }
 
 pub async fn start(grace: Duration) -> Running {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let (dir, state) = state_with_url(&format!("http://{addr}")).await;
+    let (dir, state) = state_with(AuthConfig::default(), &format!("http://{addr}")).await;
     let core = state.core.clone();
+    let token = token(&core, "alice", ALL_REPO_AND_USER).await;
     let git_tasks = state.git_tasks.clone();
     let app = klotho_server::build_app(state, &ServerConfig::default());
     let (stop, stopped) = oneshot::channel();
@@ -57,7 +103,7 @@ pub async fn start(grace: Duration) -> Running {
         let _ = stopped.await;
     };
     let server = tokio::spawn(klotho_server::serve(listener, app, git_tasks, shutdown, grace));
-    Running { addr, core, stop, server, dir }
+    Running { addr, core, token, stop, server, dir }
 }
 
 /// Runs `git` in `dir` and returns (stdout, stderr), failing the test if git fails.

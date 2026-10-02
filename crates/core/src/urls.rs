@@ -26,6 +26,11 @@ impl Urls {
         Ok(Self { base: base.to_owned(), host: host.to_owned() })
     }
 
+    /// Whether people reach Klotho over HTTPS, which secure cookies need.
+    pub fn is_https(&self) -> bool {
+        self.base.starts_with("https://")
+    }
+
     /// The repository's web page: `https://host/Owner/Repo`.
     pub fn html(&self, full_name: &str) -> String {
         format!("{}/{full_name}", self.base)
@@ -34,6 +39,11 @@ impl Urls {
     /// The HTTPS clone URL, with the display name and `.git` (FR-NAME-042).
     pub fn clone(&self, full_name: &str) -> String {
         format!("{}/{full_name}.git", self.base)
+    }
+
+    /// Any page on this site, e.g. `absolute("/-/register?invite=…")`.
+    pub fn absolute(&self, path_and_query: &str) -> String {
+        format!("{}{path_and_query}", self.base)
     }
 
     /// An API URL, e.g. for `Link` headers: `api("/users/x/repos")`.

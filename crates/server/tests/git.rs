@@ -13,7 +13,7 @@ use common::{blocking, git, local_repo_with_commit};
 #[tokio::test(flavor = "multi_thread")]
 async fn push_then_clone_with_any_casing_and_optional_git_suffix() {
     let running = common::start(Duration::from_secs(5)).await;
-    running.core.create_repo("alice", "MyRepo").await.unwrap();
+    running.core.create_repo("alice", "MyRepo", false).await.unwrap();
     let work = tempfile::tempdir().unwrap();
     let (push_url, clone_url) = (running.url("/alice/myrepo.git"), running.url("/ALICE/MyRepo"));
     let work_path = work.path().to_owned();
@@ -33,7 +33,7 @@ async fn windows_device_names_clone_fine() {
     let work = tempfile::tempdir().unwrap();
     let work_path = work.path().to_owned();
     for name in ["con", "nul", "aux"] {
-        running.core.create_repo("alice", name).await.unwrap();
+        running.core.create_repo("alice", name, false).await.unwrap();
         let url = running.url(&format!("/alice/{name}.git"));
         let work_path = work_path.clone();
         let name = name.to_owned();
@@ -74,16 +74,29 @@ async fn an_adopted_legacy_repository_can_be_cloned() {
     .await;
 }
 
+/// Unknown repositories: anonymous callers get the credential challenge (the
+/// repository might be private), signed-in callers a plain 404.
 #[tokio::test(flavor = "multi_thread")]
-async fn unknown_repositories_are_404_for_git() {
+async fn unknown_repositories_for_git() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let running = common::start(Duration::from_secs(5)).await;
-    // A raw request: the git client would only print its own error.
-    let mut conn = tokio::net::TcpStream::connect(running.addr).await.unwrap();
-    let request = "GET /alice/nope.git/info/refs?service=git-upload-pack HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
-    conn.write_all(request.as_bytes()).await.unwrap();
-    let mut response = String::new();
-    conn.read_to_string(&mut response).await.unwrap();
-    assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+    // Raw requests: the git client would only print its own error.
+    let send = |authorization: Option<String>| async move {
+        let mut conn = tokio::net::TcpStream::connect(running.addr).await.unwrap();
+        let auth = authorization.map(|value| format!("Authorization: {value}\r\n")).unwrap_or_default();
+        let request = format!(
+            "GET /alice/nope.git/info/refs?service=git-upload-pack HTTP/1.1\r\nHost: x\r\n{auth}Connection: close\r\n\r\n"
+        );
+        conn.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        conn.read_to_string(&mut response).await.unwrap();
+        response
+    };
+    let anonymous = send(None).await;
+    assert!(anonymous.starts_with("HTTP/1.1 401"), "{anonymous}");
+    assert!(anonymous.to_ascii_lowercase().contains("www-authenticate: basic"), "{anonymous}");
+
+    let signed_in = send(Some(running.basic_auth())).await;
+    assert!(signed_in.starts_with("HTTP/1.1 404"), "{signed_in}");
 }

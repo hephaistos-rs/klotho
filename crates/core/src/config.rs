@@ -17,6 +17,7 @@ use serde::Deserialize;
 pub struct Config {
     pub server: ServerConfig,
     pub storage: StorageConfig,
+    pub auth: AuthConfig,
     pub log: LogConfig,
 }
 
@@ -105,6 +106,45 @@ pub struct DataPaths {
     pub repositories: PathBuf,
     pub database: PathBuf,
     pub files: PathBuf,
+}
+
+/// Accounts and sign-in.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AuthConfig {
+    /// Who may create an account (FR-AUTH-002).
+    pub registration: Registration,
+    /// A web session ends after this many days without a request (FR-AUTH-041).
+    pub session_idle_days: u32,
+    /// …and after this many days in any case.
+    pub session_max_days: u32,
+}
+
+impl AuthConfig {
+    pub fn session_idle(&self) -> Duration {
+        Duration::from_secs(u64::from(self.session_idle_days) * 24 * 60 * 60)
+    }
+
+    pub fn session_max(&self) -> Duration {
+        Duration::from_secs(u64::from(self.session_max_days) * 24 * 60 * 60)
+    }
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self { registration: Registration::Disabled, session_idle_days: 14, session_max_days: 90 }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Registration {
+    /// Anyone can sign up.
+    Open,
+    /// Only with an invite link from `klotho admin invite`.
+    Invite,
+    /// Only administrators create accounts (`klotho admin create-user`).
+    Disabled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

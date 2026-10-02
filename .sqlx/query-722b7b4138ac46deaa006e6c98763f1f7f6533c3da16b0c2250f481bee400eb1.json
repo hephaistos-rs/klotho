@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE one_time_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "722b7b4138ac46deaa006e6c98763f1f7f6533c3da16b0c2250f481bee400eb1"
+}

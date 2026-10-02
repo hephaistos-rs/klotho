@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "INSERT INTO repositories (owner_id, name, name_key, created_at) VALUES (?, ?, ?, ?) RETURNING id AS \"id!\"",
+  "query": "INSERT INTO repositories (owner_id, name, name_key, created_at, private) VALUES (?, ?, ?, ?, ?) RETURNING id AS \"id!\"",
   "describe": {
     "columns": [
       {
@@ -16,11 +16,11 @@
       }
     ],
     "parameters": {
-      "Right": 4
+      "Right": 5
     },
     "nullable": [
       null
     ]
   },
-  "hash": "8aabe863d7907acd0ab050c988a9c382fee595aba0054da5dbfcba1b87dfeca2"
+  "hash": "6fe68129a4ae36c69fe9da3c992c87f4f313abb629c39f21bfbe124ba80cc6d2"
 }

@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT u.id AS \"id!\", o.name, u.is_admin AS \"is_admin: bool\", u.suspended_at, u.password_hash\n                       FROM users u JOIN owners o ON o.id = u.id WHERE o.name_key = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "owners",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "is_admin: bool",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "is_admin"
+          }
+        }
+      },
+      {
+        "name": "suspended_at",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "suspended_at"
+          }
+        }
+      },
+      {
+        "name": "password_hash",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "password_hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "04697e231f7d8df8bfc867f9078908f236714bd2631fb13767af0ac89ee1436a"
+}

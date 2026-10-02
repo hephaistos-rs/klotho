@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.id AS \"token_id!\", t.scopes, t.expires_at, t.last_used_at,\n                      u.id AS \"id!\", o.name, u.is_admin AS \"is_admin: bool\", u.suspended_at\n               FROM access_tokens t JOIN users u ON u.id = t.user_id JOIN owners o ON o.id = u.id\n               WHERE t.token_hash = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "token_id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "access_tokens",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "scopes",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "access_tokens",
+            "name": "scopes"
+          }
+        }
+      },
+      {
+        "name": "expires_at",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "access_tokens",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "name": "last_used_at",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "access_tokens",
+            "name": "last_used_at"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "owners",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "is_admin: bool",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "is_admin"
+          }
+        }
+      },
+      {
+        "name": "suspended_at",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "suspended_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "8ecdd3f846ced72da209e04b4b7e35805f1568b916536da69c25e87ab0306e3f"
+}

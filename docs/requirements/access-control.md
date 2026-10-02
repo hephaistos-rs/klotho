@@ -51,11 +51,11 @@
 
 ## Conflicts with the current implementation
 
-Checked against commit `6b4895f`.
+Checked after Phase 2 (2026-10-02). No conflicts are open; collaborators, teams and organisations (the other ways to hold a level) are unimplemented, not in conflict.
 
-| Requirement | Current behaviour | Where |
-|---|---|---|
-| FR-ACL-001 (push requires write) | **Conflict (critical).** `git-receive-pack` is served to any anonymous client, so anyone who can reach the port can push, overwrite branches or delete refs. | [git_http.rs:31-38](../../crates/server/src/git_http.rs#L31-L38) |
-| FR-ACL-011 (private repos invisible) | **Conflict.** There is no visibility setting, so every repository is effectively public and is listed by `GET /api/v1/users/{username}/repos`. | [api.rs](../../crates/server/src/api.rs) (`user_repos`) |
-
-The default bind address of `127.0.0.1` limits the exposure while there is no access control. Changing `KLOTHO_ADDR` to a public interface exposes every repository to writes.
+Met today, all through one pure function, `klotho_core::access::authorize(actor, repo, action)`, tested as a table of cases, and `Core::repo_for`, which every API handler, git request and page uses:
+- FR-ACL-001, 003, 004, 007: read, write and admin levels; owners have admin on their repositories; instance administrators on all.
+- FR-ACL-010, 011: public repositories are readable anonymously; private ones are left out of listings (`list_repos` asks `authorize` whether the caller can see the owner's private repositories).
+- FR-ACL-013: no read access and "doesn't exist" are the same error inside core (`RepoNotFound`), so the API's and git's answers are identical. Anonymous git requests get the `401` challenge for both.
+- FR-ACL-030: a token's scopes cap what its owner may do, and a suspended owner's tokens stop working.
+- FR-ACL-050: web, API and git share `authorize`; SSH will too.

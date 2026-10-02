@@ -67,10 +67,18 @@ How these fit together as concrete flows and endpoints is described in [design/a
 
 ## Conflicts with the current implementation
 
-Checked against commit `6b4895f`.
+Checked after Phase 2 (2026-10-02).
 
 | Requirement | Current behaviour | Where |
 |---|---|---|
-| FR-AUTH-001, FR-AUTH-020, FR-AUTH-022 (any authentication at all) | **Conflict (critical).** There are no accounts and no authentication. Every git and API request is anonymous, and anonymous callers can push (acknowledged in a TODO). | [git_http.rs:9](../../crates/server/src/git_http.rs#L9), [lib.rs:10-15](../../crates/server/src/lib.rs#L10-L15) |
+| FR-AUTH-042 (list and revoke sessions; password change revokes others) | **Partial.** Sessions are server-side and sign-out deletes the row, but there's no page listing them and no password change yet. | [auth.rs](../../crates/core/src/auth.rs) |
+| FR-AUTH-043 (throttle failed sign-ins) | **Missing.** Wrong passwords and tokens aren't throttled yet (Phase 5). Argon2id makes each password guess slow, but not rate-limited. | [account.rs](../../crates/web/src/account.rs) |
 
-Every other requirement in this file is unimplemented, not in conflict.
+Met today:
+- FR-AUTH-001: local accounts with a username and an email address.
+- FR-AUTH-002: `auth.registration` is `open`, `invite` (single-use links from `klotho admin invite`, valid 7 days) or `disabled` (the default).
+- FR-AUTH-003: the first administrator comes from `klotho admin create-user --admin`; nothing is open on the network for it.
+- FR-AUTH-010: Argon2id PHC strings. A sign-in for a missing account still runs Argon2id against a dummy hash.
+- FR-AUTH-011, 012, 013: tokens with a name, scopes and an optional expiry, created on `/-/settings/tokens` and shown once; only their SHA-256 is stored; `klotho_pat_` + 30 base62 characters + a 6-character CRC-32 checksum, so typos are rejected without a lookup.
+- FR-AUTH-020, 021, 022, 023: git takes Basic auth with a token as the password and refuses account passwords; the API takes `Bearer` tokens only; missing credentials on git get `401` with `WWW-Authenticate: Basic`.
+- FR-AUTH-040, 041, 045: the session cookie is `HttpOnly`, `SameSite=Lax`, and over HTTPS `Secure` with the `__Host-` prefix (over plain HTTP, for localhost development, neither); sessions end after 14 idle days or 90 days in all (configurable); every sign-in gets a fresh token.
