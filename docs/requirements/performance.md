@@ -46,11 +46,12 @@
 
 ## Conflicts with the current implementation
 
-Checked after Phase 1 (2026-10-01).
+Checked 2026-10-02, during Phase 3.
 
 | Requirement | Current behaviour | Where |
 |---|---|---|
 | NFR-PERF-021 (startup time independent of repository count) | **Not ensured.** The startup storage check (FR-STOR-020) walks every directory under the storage root. It never opens a repository, so it's fast, but it grows with the count. If it shows up in startup times, move it to a background task after the server starts listening. | [main.rs](../../crates/klotho/src/main.rs) (`serve`), [store.rs](../../crates/git/src/store.rs) (`scan`) |
 | NFR-PERF-013 (streamed raw downloads) | **Conflict.** `read_blob` loads the whole blob into a `Vec<u8>`, which the handler then returns, so memory grows with file size. | [browse.rs](../../crates/git/src/browse.rs) (`read_blob`), [api.rs](../../crates/server/src/api.rs) (`raw`) |
+| NFR-PERF-014 (path-filtered log) | **Not ensured.** With a path filter, the log compares the path's entry with each parent's for every commit it walks, so a page for a path that rarely changes can walk all of history. There are no commit-graph Bloom filters yet (FR-STOR-031). | [browse.rs](../../crates/git/src/browse.rs) (`log`, `changes_path`) |
 
-Met today: NFR-PERF-004 (request and response bodies are streamed through git's stdin and stdout), NFR-PERF-011 (repository listings come from the database, a page at a time, never from a directory scan), NFR-PERF-014 (the commit walk stops after `limit` commits) and NFR-PERF-022 (gix and filesystem work runs on the blocking pool).
+Met today: NFR-PERF-004 (request and response bodies are streamed through git's stdin and stdout), NFR-PERF-011 (repository listings come from the database, a page at a time, never from a directory scan), NFR-PERF-014 for unfiltered logs (the commit walk stops after one page; a cursor names the starting commit and the depth, so a page costs time in proportion to its depth, not to the length of history) and NFR-PERF-022 (gix and filesystem work runs on the blocking pool).

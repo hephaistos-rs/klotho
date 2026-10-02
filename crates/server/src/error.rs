@@ -66,6 +66,7 @@ impl From<Error> for ApiError {
             Error::InvalidInvite => (S::BAD_REQUEST, "invite_invalid"),
             Error::Git(klotho_git::Error::RevisionNotFound(_)) => (S::NOT_FOUND, "revision_not_found"),
             Error::Git(klotho_git::Error::PathNotFound(_)) => (S::NOT_FOUND, "path_not_found"),
+            Error::Git(klotho_git::Error::InvalidCursor(_)) => (S::BAD_REQUEST, "cursor_invalid"),
             _ => return Self::internal(&err),
         };
         Self::new(status, code, err.to_string())

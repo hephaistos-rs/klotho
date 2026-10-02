@@ -100,3 +100,60 @@ async fn unknown_repositories_for_git() {
     let signed_in = send(Some(running.basic_auth())).await;
     assert!(signed_in.starts_with("HTTP/1.1 404"), "{signed_in}");
 }
+
+/// What the real git client pushes reads back through the `klotho-core` read
+/// services: branches, an annotated tag, the log with its original UTC offsets
+/// (FR-API-011), and `ref/path` specs split at the longest branch.
+#[tokio::test(flavor = "multi_thread")]
+async fn pushed_history_reads_back_through_the_core_services() {
+    use common::git_output_env;
+    use klotho_core::{Action, Actor, LogQuery};
+
+    let running = common::start(Duration::from_secs(5)).await;
+    let work = tempfile::tempdir().unwrap();
+    let (work_path, url) = (work.path().to_owned(), running.url("/alice/demo.git"));
+    blocking(move || {
+        let local = work_path.join("local");
+        std::fs::create_dir_all(local.join("src")).unwrap();
+        git(&local, &["init", "-q"]);
+        for (n, date) in [(1, "2024-01-02T03:04:05+05:30"), (2, "2024-02-03T04:05:06-08:00")] {
+            std::fs::write(local.join("src").join("lib.rs"), format!("// {n}\n")).unwrap();
+            git(&local, &["add", "."]);
+            let env = [("GIT_AUTHOR_DATE", date), ("GIT_COMMITTER_DATE", date)];
+            git_output_env(&local, &env, &["commit", "-q", "-m", &format!("change {n}")]);
+        }
+        git(&local, &["tag", "-a", "v1", "-m", "Version 1"]);
+        git(&local, &["checkout", "-q", "-b", "feature/login"]);
+        std::fs::write(local.join("other.txt"), "x\n").unwrap();
+        git(&local, &["add", "."]);
+        git(&local, &["commit", "-q", "-m", "other file"]);
+        git(&local, &["push", "-q", &url, "main", "feature/login", "v1"]);
+    })
+    .await;
+
+    let core = &running.core;
+    let repo = core.repo_for(&Actor::Anonymous, "alice", "demo", Action::Read).await.unwrap();
+    let branches = core.branches(&repo, None, None).await.unwrap();
+    let names: Vec<_> = branches.items.iter().map(|b| (b.name.as_str(), b.default)).collect();
+    assert_eq!(names, [("feature/login", false), ("main", true)]);
+
+    let log = core.commits(&repo, LogQuery { limit: Some(1), ..LogQuery::default() }).await.unwrap();
+    assert_eq!(log.items[0].summary, "change 2");
+    assert_eq!(log.items[0].author.date.to_string(), "2024-02-03T04:05:06-08:00");
+    let rest = LogQuery { cursor: log.next, ..LogQuery::default() };
+    let rest = core.commits(&repo, rest).await.unwrap();
+    assert_eq!(rest.items[0].committer.date.to_string(), "2024-01-02T03:04:05+05:30");
+    assert!(rest.next.is_none());
+
+    let only_other =
+        LogQuery { rev: Some("feature/login".into()), path: "other.txt".into(), ..LogQuery::default() };
+    let only_other = core.commits(&repo, only_other).await.unwrap();
+    assert_eq!(only_other.items.len(), 1);
+
+    let tag = core.tag(&repo, "v1").await.unwrap();
+    assert_eq!(tag.annotation.unwrap().message.trim(), "Version 1");
+    assert_eq!(tag.commit.unwrap().summary, "change 2");
+
+    let resolved = core.resolve_spec(&repo, "feature/login/src/lib.rs").await.unwrap();
+    assert_eq!((resolved.target.name.as_str(), resolved.path.as_str()), ("feature/login", "src/lib.rs"));
+}

@@ -45,11 +45,10 @@
 
 ## Conflicts with the current implementation
 
-Checked after Phase 1 (2026-10-01).
+Checked 2026-10-02, during Phase 3.
 
 | Requirement | Current behaviour | Where |
 |---|---|---|
-| FR-API-011 (RFC 3339 timestamps with offset) | **Partial.** Repository `created_at` is RFC 3339, but commits still give `author_time` as Unix seconds and drop the author's UTC offset and the committer. Phase 3 replaces these endpoints. | [browse.rs](../../crates/git/src/browse.rs) (`CommitInfo`) |
-| FR-API-020, FR-API-021 (pagination) | **Partial.** `GET /users/{username}/repos` is paged with a `Link` header. `GET …/commits` has a `limit` (max 500) but no next page, and `GET …/tree` is unbounded. Phase 3 replaces these endpoints. | [api.rs](../../crates/server/src/api.rs) |
+| FR-API-020, FR-API-021 (pagination) | **Partial.** `GET /users/{username}/repos` is paged with a `Link` header. `klotho-core` pages branches, tags and the commit log with cursors (max 100), but `GET …/commits` returns no next cursor or `Link` header yet, and `GET …/tree` is unbounded. The next Phase 3 step replaces these endpoints. | [api.rs](../../crates/server/src/api.rs) |
 
-Met today: FR-API-001 (`/api/v1`, with JSON 404s for anything else under `/api`), FR-API-003 (`/api/v1/repos/{owner}/{repo}`), FR-API-010 (repository resource with ID, owner, display name, URLs built from `server.public_url`), FR-API-012 (full object IDs) and FR-API-030 (`{"code", "message"}` errors). Internal error details are hidden from clients; that requirement lives in [security.md](security.md) as NFR-SEC-030.
+Met today: FR-API-001 (`/api/v1`, with JSON 404s for anything else under `/api`), FR-API-003 (`/api/v1/repos/{owner}/{repo}`), FR-API-010 (repository resource with ID, owner, display name, URLs built from `server.public_url`), FR-API-011 (RFC 3339 times; commit author and committer dates keep their original UTC offset), FR-API-012 (full object IDs) and FR-API-030 (`{"code", "message"}` errors). Internal error details are hidden from clients; that requirement lives in [security.md](security.md) as NFR-SEC-030.

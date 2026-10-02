@@ -27,19 +27,15 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use klotho_core::browse::{DEFAULT_PAGE, MAX_PAGE};
 use klotho_core::config::Registration;
-use klotho_core::{Action, Core, NewUser, Owner, Repo, Scope, StorageReport, TokenInfo};
+use klotho_core::{Action, Core, LogQuery, NewUser, Owner, Repo, Scope, StorageReport, TokenInfo};
 use klotho_git::{CommitInfo, RepoInfo, TreeEntryInfo};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::auth::{api_actor, require_admin, require_user};
 use crate::error::ApiError;
-
-const MAX_COMMITS: usize = 500;
-/// Page sizes (FR-API-020).
-const DEFAULT_PAGE: u32 = 30;
-const MAX_PAGE: u32 = 100;
 
 /// The `/api` router: version 1, plus JSON 404s for anything else under `/api`
 /// so it never falls through to the web UI's HTML pages (FR-UI-050).
@@ -113,15 +109,12 @@ impl RepoResource {
 
 #[derive(Deserialize)]
 struct RevQuery {
-    #[serde(default = "default_rev")]
-    rev: String,
+    /// A branch, tag or commit ID; the default branch if missing.
+    rev: Option<String>,
     #[serde(default)]
     path: String,
-    limit: Option<usize>,
-}
-
-fn default_rev() -> String {
-    "HEAD".to_owned()
+    limit: Option<u32>,
+    cursor: Option<String>,
 }
 
 async fn repo(
@@ -162,8 +155,8 @@ async fn commits(
 ) -> Result<Json<Vec<CommitInfo>>, ApiError> {
     let actor = api_actor(&core, &headers).await?;
     let repo = core.repo_for(&actor, &owner, &name, Action::Read).await?;
-    let limit = query.limit.unwrap_or(30).min(MAX_COMMITS);
-    Ok(Json(core.with_git(&repo, move |git| CommitInfo::log(git, &query.rev, limit)).await?))
+    let log = LogQuery { rev: query.rev, path: query.path, cursor: query.cursor, limit: query.limit };
+    Ok(Json(core.commits(&repo, log).await?.items))
 }
 
 async fn tree(
@@ -174,7 +167,9 @@ async fn tree(
 ) -> Result<Json<Vec<TreeEntryInfo>>, ApiError> {
     let actor = api_actor(&core, &headers).await?;
     let repo = core.repo_for(&actor, &owner, &name, Action::Read).await?;
-    Ok(Json(core.with_git(&repo, move |git| TreeEntryInfo::list(git, &query.rev, &query.path)).await?))
+    Ok(Json(
+        core.with_git(&repo, move |git| TreeEntryInfo::list(git, query.rev.as_deref(), &query.path)).await?,
+    ))
 }
 
 async fn raw(
@@ -185,7 +180,9 @@ async fn raw(
 ) -> Result<impl IntoResponse, ApiError> {
     let actor = api_actor(&core, &headers).await?;
     let repo = core.repo_for(&actor, &owner, &name, Action::Read).await?;
-    let data = core.with_git(&repo, move |git| klotho_git::read_blob(git, &query.rev, &query.path)).await?;
+    let data = core
+        .with_git(&repo, move |git| klotho_git::read_blob(git, query.rev.as_deref(), &query.path))
+        .await?;
     // Always octet-stream with nosniff, so a pushed HTML file can't run as a page
     // on this origin (NFR-SEC-010).
     Ok((

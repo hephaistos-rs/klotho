@@ -348,6 +348,10 @@ Phases run in order: 0, 1, 1b, 2 and onwards. Phase 1b (the native git transport
 > - Keep pages thin: a page calls `current_user(cx)`, then one or two `klotho-core` services, then renders. If a page wants a query that no service offers, add the service, and the API endpoint with it.
 > - `view!` blocks get long. Run `topcoat fmt`, and split components early.
 > - In development, run `topcoat dev`. It rebuilds, re-bundles assets and restarts the server on every save.
+> - **Learned in the refs and history step:**
+>   - A log cursor can't be "the next commit": restarting a walk there loses the other side of every merge still pending. The cursor is `<tip>.<depth>`: the commit the first page started from, and how many commits came before. Pages stay stable when the branch moves, and page *n* costs time in proportion to its depth (NFR-PERF-014).
+>   - `?ref=` goes through our own resolver, not `rev_parse_single`, so `:/text` (a full history search), `@{…}` and `~n` can't be sent from a URL. The `ref/path` split tries each segment boundary from the longest, one ref lookup each, instead of listing every ref.
+>   - `gix::init_bare` points HEAD at `master` unless configured otherwise. Test fixtures that commit to `main` set HEAD themselves.
 
 ### Phase 4: Git hardening and data safety
 

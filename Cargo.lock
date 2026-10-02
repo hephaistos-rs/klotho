@@ -2566,7 +2566,9 @@ version = "0.1.0"
 dependencies = [
  "gix",
  "gix-pack",
+ "jiff",
  "serde",
+ "serde_json",
  "sha2 0.11.0",
  "tempfile",
  "thiserror",

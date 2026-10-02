@@ -10,6 +10,8 @@ pub enum Error {
     NotARepository(String),
     #[error("revision {0:?} not found")]
     RevisionNotFound(String),
+    #[error("invalid cursor {0:?}")]
+    InvalidCursor(String),
     #[error("path {0:?} not found")]
     PathNotFound(String),
     #[error(transparent)]

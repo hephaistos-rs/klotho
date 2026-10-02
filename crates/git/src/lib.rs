@@ -9,6 +9,9 @@ mod error;
 pub mod protocol;
 mod store;
 
-pub use browse::{CommitInfo, RefInfo, RepoInfo, TreeEntryInfo, read_blob};
+pub use browse::{
+    Annotation, BranchInfo, CommitInfo, GitTime, Page, RefKind, RefTarget, RepoInfo, Resolved, Signature,
+    TagInfo, TreeEntryInfo, branch, branches, log, read_blob, resolve, resolve_ref, tag, tags,
+};
 pub use error::{Error, Result};
 pub use store::{RepoId, RepoStore};
