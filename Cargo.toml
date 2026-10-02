@@ -37,6 +37,9 @@ async-compression = "0.4.49"
 axum = "0.8.9"
 futures-util = "0.3.34"
 gix = "0.87"
+# Must be the exact gix-pack that gix uses, so Cargo merges the `generate`
+# feature (pack writing, which gix doesn't enable) into that same crate.
+gix-pack = { version = "=0.74.2", default-features = false, features = ["generate"] }
 jiff = { version = "0.2.37", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

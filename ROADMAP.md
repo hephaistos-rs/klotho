@@ -244,16 +244,16 @@ Phases run in order: 0, 1, 1b, 2 and onwards. Phase 1b (the native git transport
 **Goal:** Klotho serves clone, fetch and push itself, with gitoxide, and never runs the `git` program ([ADR 0004](docs/decisions/0004-native-git-transport.md)). It comes after Phase 1 so it's built on ID-based storage, and before Phase 2 so authentication and pre-receive checks plug into our own code instead of a subprocess.
 
 - A `protocol` module in `klotho-git` that takes a repository and a byte stream in each direction, with no HTTP or SSH in it. `klotho-server` drives it statelessly (HTTP) and `klotho-ssh` statefully (Phase 4).
-- **Step 1: protocol v2 fetch.** pkt-lines with `gix-packetline`; the capability advertisement; `ls-refs` (with `ref-prefix`, `symrefs`, `peel`); `fetch` with want/have negotiation, `done`, and `side-band-64k` progress. Packs are generated with `gix-pack`'s `data::output` pipeline on the blocking pool, behind a semaphore.
+- ~~**Step 1: protocol v2 fetch.**~~ Done (2026-10-02). `klotho_git::protocol`: the capability advertisement, `ls-refs` (`ref-prefix`, `symrefs`, `peel`, `unborn`) and `fetch` (want/have negotiation, `done`, `thin-pack`, `include-tag`, `no-progress`, `side-band-64k`). `klotho-server`'s `git_native.rs` serves it for requests with `Git-Protocol: version=2`, streaming the pack from the blocking pool. Tests: `crates/server/tests/native_fetch.rs`. Not done yet: the semaphore on concurrent packs (Phase 4).
 - **Step 2: v0/v1 fetch** for older clients: the ref advertisement with capabilities, `multi_ack_detailed`, `no-done`, `thin-pack`, `ofs-delta`, `include-tag`.
 - **Step 3: push** (`receive-pack`, v0/v1 only, because git has no v2 push): commands, quarantine directory, indexing the (thin) pack with `gix-pack`, connectivity and object checks, `report-status`, `atomic`, `push-options`, and a `gix-ref` transaction. Leave a pre-receive and a post-receive function in place, both empty for now. Phase 2 fills in pre-receive.
-- **Step 4: shallow** (`deepen`, `deepen-since`, `deepen-not`, `deepen-relative`). FR-GIT-010 is must-have, because CI clones are shallow.
+- **Step 4: shallow** (`deepen`, `deepen-since`, `deepen-not`, `deepen-relative`). FR-GIT-010 is must-have, because CI clones are shallow. Until then the engine advertises `fetch=shallow` (as `git upload-pack` does), and `protocol::needs_git_program` sends any fetch with `shallow`/`deepen` lines to the `git` program. `ls-refs` and ordinary fetches stay native. Without that, step 1 broke `git clone --depth 1` ("Server does not support shallow requests"); `shallow_clones_keep_working` guards it.
 - **Step 5: partial clone filters** (`blob:none`, `blob:limit`, `tree:0`).
 - **Switch over:** route the git HTTP paths to the engine, then delete the subprocess code in `git_http.rs`, the startup git version check and `GitVersion`, and apply ADR 0004's requirement changes.
 
 **Requirements:** FR-GIT-001, 004–006, 010, 011, 020, 021 (hook points only), 022, 023; NFR-PERF-001–004; NFR-STOR-001, 002.
 
-**New packages:** `gix` features for pack writing and ref transactions; `gix-packetline` (already a dependency of `gix`, check whether `gix` re-exports it); `cargo-fuzz` as a tool.
+**New packages:** `gix-pack` with its `generate` feature, pinned to the exact version `gix` uses (gix doesn't enable pack writing itself); `cargo-fuzz` as a tool. pkt-lines are our own small module instead of `gix-packetline`: about 60 lines, with our own limits on untrusted input, and none of the client-side feature flags.
 
 **Done when:**
 - [ ] The end-to-end suite (real `git` client against the real binary, Linux and Windows) passes for: clone, fetch, push, force push, delete a branch, push tags, `--atomic` with one ref rejected, `--depth 1`, `--shallow-since`, `--filter=blob:none`, and protocol v0, v1 and v2 (`-c protocol.version=N`).
@@ -265,6 +265,12 @@ Phases run in order: 0, 1, 1b, 2 and onwards. Phase 1b (the native git transport
 - [ ] No `std::process::Command` and no `tokio::process` remain outside tests.
 
 > **Guide notes.**
+> - **Learned in step 1:**
+>   - `TreeAdditionsComparedToAncestor` is the right counting mode. Feed it the commits from a rev walk over the wants with the common commits hidden, and correctness doesn't depend on commit order.
+>   - The object handle needs `prevent_pack_unload()`, or counting panics.
+>   - gix's `Reference::peel_to_id` peels **in place**, so read a ref's direct target before peeling it.
+>   - `git` sends `no-progress` when stderr isn't a terminal. Tests that look for the engine's progress line pass `--progress`.
+>   - Negotiation answers `ready` as soon as one have is common. The pack is always correct, because nothing reachable from a common commit is sent, but it may repeat objects the client has through other common commits. A smarter cut point (git's `ok_to_give_up`) is an optimisation for later.
 > - **Read git's protocol docs as the spec:** `gitprotocol-pack`, `gitprotocol-v2`, `gitprotocol-capabilities`, `gitprotocol-http`. When behaviour is unclear, check what `git upload-pack` does with `GIT_TRACE_PACKET=1` on the client.
 > - **Stateless HTTP negotiation** is the subtle part of v0/v1: each POST repeats all `have`s, and the server must answer as if the conversation had continued. Protocol v2 was designed around this, which is one reason to build v2 first.
 > - **gitoxide's client is your test partner too.** Fetching from our server with `gix` in unit tests gives fast tests that don't need the `git` program, alongside the end-to-end tests that do.

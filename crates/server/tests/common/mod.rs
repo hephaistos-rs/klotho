@@ -3,6 +3,8 @@
 #![allow(dead_code)] // each test file uses a different part
 
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use klotho_core::config::{ServerConfig, StorageConfig};
@@ -56,4 +58,48 @@ pub async fn start(grace: Duration) -> Running {
     };
     let server = tokio::spawn(klotho_server::serve(listener, app, git_tasks, shutdown, grace));
     Running { addr, core, stop, server, dir }
+}
+
+/// Runs `git` in `dir` and returns (stdout, stderr), failing the test if git fails.
+///
+/// Git runs with an empty config so the developer's own settings (credential
+/// helpers, URL rewrites, protocol versions) can't change the outcome.
+pub fn git_output(dir: &Path, args: &[&str]) -> (String, String) {
+    let empty_config = std::env::temp_dir().join(format!("klotho-test-gitconfig-{}", std::process::id()));
+    if !empty_config.exists() {
+        std::fs::write(&empty_config, "").unwrap();
+    }
+    let output = Command::new("git")
+        .args(["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "init.defaultBranch=main"])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", &empty_config)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(output.status.success(), "git {args:?} failed:\n{stderr}");
+    (String::from_utf8_lossy(&output.stdout).into_owned(), stderr)
+}
+
+/// Runs `git` in `dir` and returns stdout, failing the test with git's stderr.
+pub fn git(dir: &Path, args: &[&str]) -> String {
+    git_output(dir, args).0
+}
+
+/// Runs blocking git work without stalling the server on the same runtime.
+pub async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    tokio::task::spawn_blocking(f).await.unwrap()
+}
+
+/// Makes a local repository in `work/<name>` with one commit containing `file`.
+pub fn local_repo_with_commit(work: &Path, name: &str, file: &str) -> PathBuf {
+    let dir = work.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    git(&dir, &["init", "-q"]);
+    std::fs::write(dir.join(file), "hello\n").unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "first"]);
+    dir
 }

@@ -28,8 +28,8 @@ use tokio::process::Command;
 use tokio_util::io::{ReaderStream, StreamReader};
 use tokio_util::task::TaskTracker;
 
-use crate::AppState;
 use crate::error::ApiError;
+use crate::{AppState, git_native};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -97,8 +97,11 @@ async fn info_refs(
     let Some(service) = query.service.as_deref().and_then(Service::from_query) else {
         return Ok((StatusCode::FORBIDDEN, "only the smart HTTP protocol is supported").into_response());
     };
-    let repo_path = repo_path(&core, &owner, &repo).await?;
     let protocol = git_protocol(&headers);
+    if matches!(service, Service::UploadPack) && git_native::is_v2(protocol) {
+        return git_native::advertisement(&core, &owner, &repo).await;
+    }
+    let repo_path = repo_path(&core, &owner, &repo).await?;
 
     let output = service.command(&repo_path, protocol, true).stderr(Stdio::inherit()).output().await?;
     if !output.status.success() {
@@ -127,11 +130,22 @@ async fn rpc(
     headers: HeaderMap,
     body: Body,
 ) -> Result<Response, ApiError> {
-    let repo_path = repo_path(&core, &owner, &repo).await?;
     let expected = format!("application/x-git-{}-request", service.name());
     if headers.get(header::CONTENT_TYPE).is_none_or(|v| v != expected.as_str()) {
         return Ok(StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response());
     }
+    let mut input = if matches!(service, Service::UploadPack) && git_native::is_v2(git_protocol(&headers)) {
+        match git_native::upload_pack(&core, &git_tasks, &owner, &repo, &headers, body).await? {
+            git_native::UploadPack::Served(response) => return Ok(response),
+            // Already read and gunzipped, so git gets it as plain bytes.
+            git_native::UploadPack::NeedsGit(request) => {
+                Box::pin(std::io::Cursor::new(request)) as Pin<Box<dyn AsyncRead + Send>>
+            }
+        }
+    } else {
+        request_reader(&headers, body)
+    };
+    let repo_path = repo_path(&core, &owner, &repo).await?;
 
     let mut child = service
         .command(&repo_path, git_protocol(&headers), false)
@@ -141,12 +155,6 @@ async fn rpc(
         .spawn()?;
     let mut stdin = child.stdin.take().expect("stdin is piped");
     let stdout = child.stdout.take().expect("stdout is piped");
-
-    // git clients gzip large fetch requests.
-    let reader = StreamReader::new(body.into_data_stream().map_err(std::io::Error::other));
-    let gzipped = headers.get(header::CONTENT_ENCODING).is_some_and(|v| v == "gzip");
-    let mut input: Pin<Box<dyn AsyncRead + Send>> =
-        if gzipped { Box::pin(GzipDecoder::new(reader)) } else { Box::pin(reader) };
 
     // Feed the request in the background while the response streams out, and
     // close stdin when done so git knows the request is complete. Both tasks are
@@ -184,7 +192,15 @@ fn git_protocol(headers: &HeaderMap) -> Option<&str> {
     safe.then_some(value)
 }
 
-fn git_response(content_type: &str, body: Body) -> Response {
+/// The request body as a reader, gunzipped if the client compressed it (git
+/// gzips large fetch requests, FR-GIT-006).
+pub(crate) fn request_reader(headers: &HeaderMap, body: Body) -> Pin<Box<dyn AsyncRead + Send>> {
+    let reader = StreamReader::new(body.into_data_stream().map_err(std::io::Error::other));
+    let gzipped = headers.get(header::CONTENT_ENCODING).is_some_and(|v| v == "gzip");
+    if gzipped { Box::pin(GzipDecoder::new(reader)) } else { Box::pin(reader) }
+}
+
+pub(crate) fn git_response(content_type: &str, body: Body) -> Response {
     (
         [
             (header::CONTENT_TYPE, content_type),

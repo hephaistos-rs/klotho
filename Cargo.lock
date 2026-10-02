@@ -1650,14 +1650,17 @@ dependencies = [
  "clru",
  "crossbeam-deque",
  "gix-chunk",
+ "gix-diff",
  "gix-error",
  "gix-features",
  "gix-hash",
  "gix-hashtable",
  "gix-object",
  "gix-path",
+ "gix-traverse",
  "gix-zlib",
  "memmap2",
+ "parking_lot",
  "smallvec",
  "thiserror",
  "uluru",
@@ -2530,10 +2533,12 @@ name = "klotho-git"
 version = "0.1.0"
 dependencies = [
  "gix",
+ "gix-pack",
  "serde",
  "sha2 0.11.0",
  "tempfile",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

@@ -43,11 +43,16 @@
 
 ## Conflicts with the current implementation
 
-Checked against commit `6b4895f`.
+Checked after Phase 1b step 1 (2026-10-02).
 
 | Requirement | Current behaviour | Where |
 |---|---|---|
-| FR-GIT-024 (protect server-managed refs) | **Not enforced.** `git receive-pack` runs without hooks, so any ref namespace can be written. It only becomes a real conflict once Klotho starts managing refs such as PR heads. | [git_http.rs:62-73](../../crates/server/src/git_http.rs#L62-L73) |
-| FR-GIT-020, FR-GIT-021 (push hook points) | **Missing.** `receive-pack` runs with no pre-receive or post-receive integration, so the server can't enforce rules or learn what was pushed. | [git_http.rs:120-165](../../crates/server/src/git_http.rs#L120-L165) |
+| FR-GIT-020, FR-GIT-021 (push hook points) | **Missing.** Pushes still go to `git receive-pack` with no pre-receive or post-receive integration, so the server can't enforce rules or learn what was pushed. The native engine's push (Phase 1b, step 3) brings both as function calls. | [git_http.rs](../../crates/server/src/git_http.rs) (`rpc`) |
+| FR-GIT-024 (protect server-managed refs) | **Not enforced.** `git receive-pack` runs without hooks, so any ref namespace can be written. It only becomes a real conflict once Klotho manages refs such as PR heads. | [git_http.rs](../../crates/server/src/git_http.rs) (`rpc`) |
 
-Met today: FR-GIT-001 (verified by cloning over HTTP), FR-GIT-004 (403 with a message), FR-GIT-005 (the `Git-Protocol` header is forwarded), FR-GIT-006 (gzip decoding) and FR-GIT-010 (shallow clones are handled by `upload-pack`).
+Met today:
+- FR-GIT-001: clone, fetch and push over smart HTTP. Protocol v2 clone and fetch are served by Klotho's own engine (ADR 0004); pushes, v0/v1 and shallow fetches still go to the `git` program.
+- FR-GIT-004: 403 with a message for dumb HTTP.
+- FR-GIT-005: v2 natively, and v0/v1 through the fallback.
+- FR-GIT-006: gzip-compressed requests.
+- FR-GIT-010: shallow clones (`--depth`, `--deepen`), through the fallback until step 4.

@@ -8,7 +8,9 @@ publish.workspace = true
 
 [dependencies]
 gix.workspace = true
+gix-pack.workspace = true
 serde.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
+tracing.workspace = true

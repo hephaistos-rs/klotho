@@ -99,4 +99,8 @@ The current subprocess transport (`crates/server/src/git_http.rs`) and the start
 - **Reworded:** NFR-OPS-001 (no runtime dependencies at all); NFR-SEC-022 and NFR-SEC-023 (limits on concurrent pack generation and per-request time instead of subprocesses); NFR-STOR-001 (Klotho fsyncs packs and refs itself).
 - **Withdrawn:** NFR-OPS-003 (git version check), NFR-SEC-040 and NFR-SEC-041 (subprocess arguments and environment), since Klotho starts no subprocesses.
 
+**Updated 2026-10-02, after step 1 (v2 fetch).**
+- pkt-lines are a small module of our own, not `gix-packetline`. The encoding is trivial, and owning it means our own limits on untrusted input.
+- Pack writing is behind `gix-pack`'s `generate` feature, which `gix` doesn't enable. `klotho-git` depends on `gix-pack` at the exact version `gix` uses, so Cargo turns the feature on for that same crate. Keep the two in step on every gix upgrade.
+
 **Revisit if:** the engine can't reach the NFR-PERF-001 target after our own repack exists, or gitoxide gains a maintained server side we could adopt instead.

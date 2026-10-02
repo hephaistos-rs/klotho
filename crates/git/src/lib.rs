@@ -7,6 +7,7 @@
 
 mod browse;
 mod error;
+pub mod protocol;
 mod store;
 mod version;
 

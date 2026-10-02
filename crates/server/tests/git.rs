@@ -6,42 +6,9 @@
 
 mod common;
 
-use std::path::Path;
-use std::process::Command;
 use std::time::Duration;
 
-/// Runs `git` in `dir` and returns stdout, failing the test with git's stderr.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let empty_config = dir.parent().unwrap().join("empty-gitconfig");
-    std::fs::write(&empty_config, "").unwrap();
-    let output = Command::new("git")
-        .args(["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "init.defaultBranch=main"])
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_GLOBAL", &empty_config)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "git {args:?} failed:\n{}", String::from_utf8_lossy(&output.stderr));
-    String::from_utf8_lossy(&output.stdout).into_owned()
-}
-
-/// Runs blocking git work without stalling the server on the same runtime.
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    tokio::task::spawn_blocking(f).await.unwrap()
-}
-
-/// Makes a local repository in `work/<name>` with one commit containing `file`.
-fn local_repo_with_commit(work: &Path, name: &str, file: &str) -> std::path::PathBuf {
-    let dir = work.join(name);
-    std::fs::create_dir_all(&dir).unwrap();
-    git(&dir, &["init", "-q"]);
-    std::fs::write(dir.join(file), "hello\n").unwrap();
-    git(&dir, &["add", "."]);
-    git(&dir, &["commit", "-q", "-m", "first"]);
-    dir
-}
+use common::{blocking, git, local_repo_with_commit};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn push_then_clone_with_any_casing_and_optional_git_suffix() {

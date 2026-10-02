@@ -5,6 +5,7 @@ mod api;
 mod assets;
 mod error;
 mod git_http;
+mod git_native;
 
 use std::future::Future;
 use std::io;
