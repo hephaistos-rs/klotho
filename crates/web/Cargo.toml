@@ -10,8 +10,11 @@ publish.workspace = true
 klotho-core.workspace = true
 jiff.workspace = true
 serde.workspace = true
-topcoat = { workspace = true, features = ["default", "tailwind", "tower"] }
+# `default` is Topcoat's router, sessions, cookies, assets, fonts, icons and
+# runtime, which the UI is built on (ADR 0002). `ui` is the component
+# registry, `icon-iconify` the icon sets (ADR 0005).
+topcoat = { workspace = true, features = ["default", "tailwind", "tower", "ui", "icon-iconify"] }
 tracing.workspace = true
 
 [build-dependencies]
-topcoat = { workspace = true, features = ["tailwind"] }
+topcoat = { workspace = true, features = ["tailwind", "icon-iconify"] }

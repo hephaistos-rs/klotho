@@ -1,6 +1,8 @@
-# Allowlist: ignore every file, then allow the file types we track.
+# Allowlist: ignore every file, then allow what we track.
 # `!dir/` only re-includes a directory, not the files in it, so files are
-# allowed by type. A new kind of file needs a line here (or `git add -f`).
+# allowed by type or by path. A new kind of file needs a line here
+# (or a one-off `git add -f`).
+# Order matters: the last matching line wins.
 *
 
 # Descend into directories (the ignores at the bottom carve some back out)
@@ -14,17 +16,19 @@
 !README*
 !CHANGELOG*
 !CONTRIBUTING*
+!SECURITY*
 
-# Rust and Cargo (Cargo.toml, Cargo.lock, rustfmt.toml, deny.toml, .cargo/config.toml, ...)
+# Rust and Cargo (Cargo.toml, Cargo.lock, rustfmt.toml, deny.toml,
+# components.toml, .cargo/config.toml, ...)
 !*.rs
 !*.toml
 !Cargo.lock
 
-# Docs
-!*.md
-
 # Database migrations
 !*.sql
+
+# sqlx offline query data: required for SQLX_OFFLINE builds
+!.sqlx/*.json
 
 # Web assets (crates/web): styles, vendored scripts, fonts, images
 !*.css
@@ -35,10 +39,28 @@
 !*.ico
 !*.woff2
 
+# Vendored assets: the Iconify set, pinned versions, and licences
+# (crates/web/build.rs)
+!crates/web/icons/*.json
+!crates/web/icons/*.version
+!crates/web/icons/*.txt
+!crates/web/assets/fonts/*.txt
+
 # CI and other config
 !*.yml
 !*.yaml
-!*.json
+
+# Markdown: only these, not every note an agent writes
+!AGENTS.md
+!CLAUDE.md
+!ROADMAP.md
+!/DESIGN.md
+!/PRODUCT.md
+!docs/**/*.md
+
+# Impeccable: keep only the rubric the Klotho gate grades against;
+# the rest of .impeccable/ is per-run scratch
+!/.impeccable/klotho-rubric.md
 
 # Never track these, even if a pattern above matches.
 # They come last so they win over the `!` lines.
@@ -66,13 +88,3 @@
 
 # rustc dumps stack traces here when it hits an internal compiler error
 rustc-ice-*.txt
-
-*.md
-!README.md
-!AGENTS.md
-!CLAUDE.md
-!CONTRIBUTING.md
-!ROADMAP.md
-!CHANGELOG.md
-!LICENSE.md
-!SECURITY.md

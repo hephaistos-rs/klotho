@@ -118,6 +118,43 @@ async fn a_cross_site_form_post_with_the_session_cookie_is_refused() {
 }
 
 #[tokio::test]
+async fn the_theme_form_sets_a_cookie_and_the_page_follows_it() {
+    let (_dir, _core, app) = app().await;
+
+    // No choice yet: no class on <html>, so the stylesheet follows the system.
+    let page = body(app.clone().oneshot(get("/-/login", None)).await.unwrap()).await;
+    assert!(page.contains(r#"<html lang="en">"#), "{page}");
+
+    let response =
+        app.clone().oneshot(form("/-/theme", None, "theme=dark&return_to=%2F-%2Flogin")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()[header::LOCATION], "/-/login");
+    let set_cookie = response.headers()[header::SET_COOKIE].to_str().unwrap().to_owned();
+    assert!(
+        set_cookie.starts_with("klotho_theme=dark") && set_cookie.contains("SameSite=Lax"),
+        "{set_cookie}"
+    );
+    let cookie = set_cookie.split(';').next().unwrap().to_owned();
+
+    let page = body(app.clone().oneshot(get("/-/login", Some(&cookie))).await.unwrap()).await;
+    assert!(page.contains(r#"class="dark""#), "{page}");
+    assert!(page.contains(r#"aria-pressed="true""#) && page.contains(r#"value="dark""#), "{page}");
+
+    // An outside `return_to` goes home instead (no open redirect).
+    let response = app
+        .clone()
+        .oneshot(form("/-/theme", None, "theme=light&return_to=https%3A%2F%2Fevil.example"))
+        .await
+        .unwrap();
+    assert_eq!(response.headers()[header::LOCATION], "/");
+
+    // Back to the system choice clears the cookie.
+    let response = app.clone().oneshot(form("/-/theme", Some(&cookie), "theme=system")).await.unwrap();
+    let set_cookie = response.headers()[header::SET_COOKIE].to_str().unwrap();
+    assert!(set_cookie.starts_with("klotho_theme=;") && set_cookie.contains("Max-Age=0"), "{set_cookie}");
+}
+
+#[tokio::test]
 async fn the_api_ignores_the_session_cookie() {
     let (_dir, core, app) = app().await;
     let cookie = sign_in(&app).await;

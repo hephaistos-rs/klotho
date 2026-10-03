@@ -92,8 +92,10 @@ fn dev() -> Result {
 ///    build script reads the variable) and the binary are rebuilt; a Cargo
 ///    feature would change dependency resolution and with it the asset IDs.
 /// 3. The binary is copied alone into an empty folder, started, and must serve the
-///    home page and its stylesheet. If the second pass changed any asset's ID, the
-///    page fails to render, so this catches a broken bundle before release.
+///    home page, every stylesheet and preloaded file it links, and every file those
+///    stylesheets load (fonts), all from itself with immutable caching. The page
+///    may not reference another host. If the second pass changed any asset's ID,
+///    the page fails to render, so this catches a broken bundle before release.
 fn dist() -> Result {
     let root = workspace_root();
     let target = env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
@@ -143,13 +145,32 @@ fn smoke_test(binary: &Path) -> Result {
     let result = (|| -> Result {
         let page = get_when_up(port, "/")?;
         expect(&page, "200", "text/html")?;
-        let href = stylesheet_href(&page.body).ok_or("the home page links no stylesheet")?;
-        let css = get(port, &href)?;
-        expect(&css, "200", "text/css")?;
-        if !css.headers.contains("immutable") {
-            return Err(format!("{href} isn't served with immutable caching").into());
+        if let Some(url) =
+            urls(&page.body).into_iter().find(|url| !url.starts_with('/') || url.starts_with("//"))
+        {
+            return Err(format!("the home page references another host: {url}").into());
         }
-        println!("dist check: / and {href} served by the binary alone");
+        let stylesheets = links(&page.body, "stylesheet");
+        if !stylesheets.iter().any(|href| href.starts_with("/-/assets/")) {
+            return Err("the home page links no stylesheet from the embedded bundle".into());
+        }
+        let mut files = links(&page.body, "preload");
+        for href in &stylesheets {
+            let css = get(port, href)?;
+            expect(&css, "200", "text/css")?;
+            immutable(href, &css)?;
+            files.extend(css_urls(&css.body));
+        }
+        for href in &files {
+            let file = get(port, href)?;
+            expect(&file, "200", "")?;
+            immutable(href, &file)?;
+        }
+        println!(
+            "dist check: /, {} stylesheets and {} files they load served by the binary alone",
+            stylesheets.len(),
+            files.len()
+        );
         Ok(())
     })();
 
@@ -171,6 +192,14 @@ struct Response {
     status_line: String,
     headers: String,
     body: String,
+}
+
+fn immutable(href: &str, response: &Response) -> Result {
+    if response.headers.contains("immutable") {
+        Ok(())
+    } else {
+        Err(format!("{href} isn't served with immutable caching").into())
+    }
 }
 
 fn expect(response: &Response, status: &str, content_type: &str) -> Result {
@@ -211,10 +240,45 @@ fn get(port: u16, path: &str) -> Result<Response> {
     Ok(Response { status_line: status_line.to_owned(), headers: headers.to_owned(), body: body.to_owned() })
 }
 
-fn stylesheet_href(html: &str) -> Option<String> {
-    let link = &html[html.find("rel=\"stylesheet\"")?..];
-    let href = &link[link.find("href=\"")? + "href=\"".len()..];
-    Some(href[..href.find('"')?].to_owned())
+/// The `href` of every `<link rel="{rel}">` in `html`.
+fn links(html: &str, rel: &str) -> Vec<String> {
+    html.split("<link")
+        .skip(1)
+        .map(|tag| &tag[..tag.find('>').unwrap_or(tag.len())])
+        .filter(|tag| tag.contains(&format!("rel=\"{rel}\"")))
+        .filter_map(|tag| attr(tag, "href"))
+        .collect()
+}
+
+/// Every `href` and `src` value in `html`.
+fn urls(html: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for name in ["href", "src"] {
+        let needle = format!(" {name}=\"");
+        let mut rest = html;
+        while let Some(start) = rest.find(&needle) {
+            rest = &rest[start + needle.len()..];
+            let end = rest.find('"').unwrap_or(rest.len());
+            found.push(rest[..end].to_owned());
+        }
+    }
+    found.retain(|url| !url.starts_with('#'));
+    found
+}
+
+fn attr(tag: &str, name: &str) -> Option<String> {
+    let needle = format!(" {name}=\"");
+    let value = &tag[tag.find(&needle)? + needle.len()..];
+    Some(value[..value.find('"')?].to_owned())
+}
+
+/// Every `url(...)` in a stylesheet, unquoted.
+fn css_urls(css: &str) -> Vec<String> {
+    css.split("url(")
+        .skip(1)
+        .filter_map(|rest| rest.find(')').map(|end| rest[..end].trim_matches(['"', '\'']).to_owned()))
+        .filter(|url| !url.starts_with("data:"))
+        .collect()
 }
 
 fn run(cmd: &mut Command) -> Result {
@@ -232,9 +296,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn finds_the_stylesheet_link() {
-        let html = r#"<head><link rel="stylesheet" href="/-/assets/tailwind-abc.css"></head>"#;
-        assert_eq!(stylesheet_href(html).as_deref(), Some("/-/assets/tailwind-abc.css"));
-        assert_eq!(stylesheet_href("<p>no styles</p>"), None);
+    fn finds_links_urls_and_css_urls() {
+        let html = concat!(
+            r#"<head><link rel="preload" href="/-/assets/a.woff2" as="font">"#,
+            r#"<link rel="stylesheet" href="/-/assets/tailwind-abc.css"></head>"#,
+            r##"<a href="/x">x</a><a href="#main">skip</a>"##,
+        );
+        assert_eq!(links(html, "stylesheet"), ["/-/assets/tailwind-abc.css"]);
+        assert_eq!(links(html, "preload"), ["/-/assets/a.woff2"]);
+        assert_eq!(urls(html), ["/-/assets/a.woff2", "/-/assets/tailwind-abc.css", "/x"]);
+        assert!(links("<p>no styles</p>", "stylesheet").is_empty());
+        let css = r#"@font-face{src:url("/-/assets/n.woff2") format("woff2")}a{background:url(data:x)}"#;
+        assert_eq!(css_urls(css), ["/-/assets/n.woff2"]);
     }
 }

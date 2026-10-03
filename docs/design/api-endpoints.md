@@ -175,6 +175,7 @@ Topcoat routes in `klotho-web`. They are HTML pages and form `POST`s that answer
 | GET, POST | `/-/auth/forgot` · `/-/auth/reset?token=…` · `/-/auth/verify?token=…` | anon | Password reset and email verification (same confirm-then-`POST` pattern) | FR-AUTH-004/005 | P5 |
 | GET, POST | `/-/sudo?return_to=` | user | Re-authenticate (password, passkey or TOTP) to enter sudo mode | FR-AUTH-044 | P5 |
 | POST | `/-/logout` | user | End the current session | — | P2 |
+| POST | `/-/theme` | anon | Store the colour scheme (system, light or dark) in a cookie and go back to `return_to`. A browser display preference, not account data, so it has no API endpoint either ([ADR 0005](../decisions/0005-tailwind-and-design-system.md)) | NFR-UI-005 | P3 |
 | GET, POST | `/-/settings/password` | user + current password (P2); sudo from P5 | Change the password, or remove it if a passkey exists (P5) | FR-AUTH-010/016 | P2 |
 | GET, POST | `/-/settings/tokens` | user / sudo | Create a personal access token (shown once) | FR-AUTH-011 | P2 |
 | GET, POST | `/-/settings/emails` | user / sudo | Add, remove, verify and make primary | FR-AUTH-004 | P5 |

@@ -6,7 +6,13 @@
 //! `klotho-core`'s [`Core`], registered as app context.
 
 mod account;
+/// Topcoat UI components, copied in with `topcoat ui add` and ours to edit.
+/// Public while pages are still adopting them, so the ones no page uses yet
+/// don't warn as dead code. The design run removes unused ones and makes
+/// this private again at its end.
+pub mod components;
 mod session;
+mod theme;
 mod tokens;
 mod ui;
 
@@ -18,6 +24,8 @@ use topcoat::Result;
 use topcoat::asset::{AssetBundle, AssetConfig, Manifest, RouterBuilderAssetExt};
 use topcoat::context::{Cx, try_app_context};
 use topcoat::cookie::RouterBuilderCookieExt;
+use topcoat::font::RouterBuilderFontExt;
+use topcoat::router::request::uri;
 use topcoat::router::tower::TowerService;
 use topcoat::router::{Router, Slot, layout, page};
 use topcoat::session::{RouterBuilderSessionExt, SessionConfig};
@@ -25,6 +33,8 @@ use topcoat::tailwind;
 use topcoat::view::{View, view};
 
 use crate::session::{SessionCookie, current_user};
+use crate::theme::current_theme;
+use crate::ui::shell;
 
 /// The web UI as a tower service, as [`service`] returns it.
 pub type WebService = TowerService;
@@ -77,6 +87,9 @@ pub fn service(assets: Assets, core: Core) -> io::Result<TowerService> {
         .page(tokens::tokens_page)
         .page(tokens::create_token)
         .route(tokens::revoke_token)
+        .route(theme::set_theme)
+        .font(theme::SANS)
+        .font(theme::MONO)
         .assets(assets)
         .build();
     Ok(TowerService::new(router))
@@ -91,49 +104,36 @@ pub async fn notify_dev_server(addr: SocketAddr) {
 #[layout("/")]
 async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<impl View> {
     let user = current_user(cx).await.cloned();
-    // Without a bundle (`Assets::None`) there's no stylesheet to link.
-    let stylesheet = try_app_context::<AssetConfig>(cx)
-        .filter(|config| config.get(tailwind::stylesheet!()).is_some())
-        .map(|config| config.resolve(tailwind::stylesheet!()));
+    let theme = current_theme(cx);
+    let path = uri(cx).path().to_owned();
+    // Without a bundle (`Assets::None`) there's no stylesheet or font file to
+    // link, and resolving an asset the bundle lacks would panic.
+    let bundled =
+        try_app_context::<AssetConfig>(cx).filter(|config| config.get(tailwind::stylesheet!()).is_some());
+    let stylesheet = bundled.map(|config| config.resolve(tailwind::stylesheet!()));
     Ok(view! {
         <!DOCTYPE html>
-        <html lang="en">
+        <html lang="en" class=(theme.html_class())>
             <head>
                 <meta charset="utf-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1">
+                <meta name="color-scheme" content="light dark">
                 <title>"Klotho"</title>
                 if let Some(href) = stylesheet {
+                    <link
+                        rel="preload"
+                        href=(theme::SANS_LATIN)
+                        as="font"
+                        type="font/woff2"
+                        crossorigin="anonymous"
+                    >
+                    topcoat::font::link(font: theme::SANS, preload: false)
+                    topcoat::font::link(font: theme::MONO, preload: false)
                     <link rel="stylesheet" href=(href)>
                 }
                 topcoat::dev::script()
             </head>
-            <body class="bg-white text-gray-900">
-                <header class="border-b">
-                    <nav class="mx-auto flex max-w-3xl items-center justify-between px-4 py-3">
-                        <a href="/" class="font-bold">"Klotho"</a>
-                        match user {
-                            Some(user) => {
-                                <div class="flex items-center gap-4 text-sm">
-                                    <span>(user.username)</span>
-                                    <a href="/-/settings/tokens">"Access tokens"</a>
-                                    <form method="post" action="/-/logout">
-                                        <button type="submit">"Sign out"</button>
-                                    </form>
-                                </div>
-                            },
-                            None => {
-                                <div class="flex items-center gap-4 text-sm">
-                                    <a href="/-/login">"Sign in"</a>
-                                    <a href="/-/register">"Register"</a>
-                                </div>
-                            },
-                        }
-                    </nav>
-                </header>
-                <main class="mx-auto max-w-3xl px-4 py-8">
-                    (slot)
-                </main>
-            </body>
+            <body>shell(user: user, theme: theme, path: path, (slot))</body>
         </html>
     })
 }
@@ -141,7 +141,9 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<impl View> {
 #[page("/")]
 async fn home() -> Result<impl View> {
     Ok(view! {
-        <h1 class="text-3xl font-bold">"Klotho"</h1>
-        <p class="mt-2 text-gray-600">"A self-hosted git forge. Browsing repositories arrives in Phase 3."</p>
+        <h1 class="text-3xl font-semibold tracking-tight">"Klotho"</h1>
+        <p class="mt-2 text-muted-foreground">
+            "A self-hosted git forge. Browsing repositories arrives in Phase 3."
+        </p>
     })
 }
