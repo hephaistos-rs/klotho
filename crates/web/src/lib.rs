@@ -7,10 +7,8 @@
 
 mod account;
 /// Topcoat UI components, copied in with `topcoat ui add` and ours to edit.
-/// Public while pages are still adopting them, so the ones no page uses yet
-/// don't warn as dead code. The design run removes unused ones and makes
-/// this private again at its end.
-pub mod components;
+/// Only the ones a page uses are kept; `topcoat ui add` brings one back.
+mod components;
 mod session;
 mod theme;
 mod tokens;
@@ -25,16 +23,21 @@ use topcoat::asset::{AssetBundle, AssetConfig, Manifest, RouterBuilderAssetExt};
 use topcoat::context::{Cx, try_app_context};
 use topcoat::cookie::RouterBuilderCookieExt;
 use topcoat::font::RouterBuilderFontExt;
+use topcoat::router::error::NotFoundError;
+use topcoat::router::header::{
+    CONTENT_SECURITY_POLICY, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+};
 use topcoat::router::request::uri;
+use topcoat::router::response::Response;
 use topcoat::router::tower::TowerService;
-use topcoat::router::{Router, Slot, layout, page};
+use topcoat::router::{Body, HeaderValue, Next, Router, Slot, StatusCode, layer, layout, page};
 use topcoat::session::{RouterBuilderSessionExt, SessionConfig};
 use topcoat::tailwind;
-use topcoat::view::{View, view};
+use topcoat::view::{View, component, error_boundary, view};
 
 use crate::session::{SessionCookie, current_user};
 use crate::theme::current_theme;
-use crate::ui::shell;
+use crate::ui::{empty_state, page_header, shell};
 
 /// The web UI as a tower service, as [`service`] returns it.
 pub type WebService = TowerService;
@@ -56,7 +59,17 @@ pub enum Assets {
 /// The web UI as a tower service. Fails when the asset bundle can't be loaded.
 pub fn service(assets: Assets, core: Core) -> io::Result<TowerService> {
     let assets = match assets {
-        Assets::NextToBinary => AssetConfig::from(AssetBundle::load()?),
+        Assets::NextToBinary => {
+            let config = AssetConfig::from(AssetBundle::load()?);
+            // A bundle from an older build has other asset IDs, and pages
+            // would quietly render without styles.
+            if config.get(tailwind::stylesheet!()).is_none() {
+                tracing::warn!(
+                    "the asset bundle next to the binary is out of date, so pages have no styles. Use `cargo xtask dev`, or run `topcoat asset bundle` after building"
+                );
+            }
+            config
+        }
         Assets::Hosted { base_url, manifest } => {
             AssetConfig::hosted_at(base_url, Manifest::parse(manifest).map_err(io::Error::other)?)
         }
@@ -77,6 +90,7 @@ pub fn service(assets: Assets, core: Core) -> io::Result<TowerService> {
         .cookies()
         .sessions(sessions)
         .app_context(core)
+        .layer(security_headers)
         .layout(root_layout)
         .page(home)
         .page(account::login_page)
@@ -88,8 +102,10 @@ pub fn service(assets: Assets, core: Core) -> io::Result<TowerService> {
         .page(tokens::create_token)
         .route(tokens::revoke_token)
         .route(theme::set_theme)
+        .page(not_found_page)
         .font(theme::SANS)
         .font(theme::MONO)
+        .font(theme::DISPLAY)
         .assets(assets)
         .build();
     Ok(TowerService::new(router))
@@ -106,6 +122,7 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<impl View> {
     let user = current_user(cx).await.cloned();
     let theme = current_theme(cx);
     let path = uri(cx).path().to_owned();
+    let title = document_title(&path);
     // Without a bundle (`Assets::None`) there's no stylesheet or font file to
     // link, and resolving an asset the bundle lacks would panic.
     let bundled =
@@ -117,8 +134,8 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<impl View> {
             <head>
                 <meta charset="utf-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1">
-                <meta name="color-scheme" content="light dark">
-                <title>"Klotho"</title>
+                <meta name="color-scheme" content=(theme.color_scheme())>
+                <title>(title)</title>
                 if let Some(href) = stylesheet {
                     <link
                         rel="preload"
@@ -129,21 +146,90 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<impl View> {
                     >
                     topcoat::font::link(font: theme::SANS, preload: false)
                     topcoat::font::link(font: theme::MONO, preload: false)
+                    topcoat::font::link(font: theme::DISPLAY, preload: false)
                     <link rel="stylesheet" href=(href)>
                 }
                 topcoat::dev::script()
             </head>
-            <body>shell(user: user, theme: theme, path: path, (slot))</body>
+            <body>
+                shell(
+                    user: user,
+                    theme: theme,
+                    path: path,
+                    error_boundary(
+                        fallback: |error| {
+                            if error.downcast_ref::<NotFoundError>().is_none() {
+                                return Err(error);
+                            }
+                            Ok(view! { cx => not_found() })
+                        },
+                        (slot)
+                    )
+                )
+            </body>
         </html>
     })
 }
 
+/// The `<title>` for a path: the page's name, then "Klotho" (WCAG 2.4.2).
+fn document_title(path: &str) -> &'static str {
+    match path {
+        "/-/login" => "Sign in · Klotho",
+        "/-/register" => "Create an account · Klotho",
+        "/-/settings/tokens" => "Access tokens · Klotho",
+        _ => "Klotho",
+    }
+}
+
 #[page("/")]
-async fn home() -> Result<impl View> {
+async fn home(cx: &Cx) -> Result<impl View> {
+    let signed_in = current_user(cx).await.is_some();
     Ok(view! {
-        <h1 class="text-3xl font-semibold tracking-tight">"Klotho"</h1>
-        <p class="mt-2 text-muted-foreground">
-            "A self-hosted git forge. Browsing repositories arrives in Phase 3."
-        </p>
+        page_header(title: "Klotho", description: "A self-hosted git forge.")
+        empty_state(
+            title: "Repositories aren't shown here yet.",
+            if signed_in {
+                "Clone and push with git, using an "
+                <a href="/-/settings/tokens">"access token"</a>
+                " as the password."
+            } else {
+                <a href="/-/login">"Sign in"</a>
+                " to create an access token for pushing, or for cloning private repositories."
+            }
+        )
     })
+}
+
+/// Every path no page claims gets the shell and a way home, with a 404
+/// status. The layout renders the same page for a page's `not_found()`.
+#[page("/{*path}")]
+async fn not_found_page() -> Result<impl View> {
+    Ok(view! { not_found() })
+}
+
+#[component]
+async fn not_found() -> Result<impl View> {
+    Ok(view! {
+        (StatusCode::NOT_FOUND)
+        page_header(
+            title: "Page not found",
+            description: "Nothing lives at this address, or you can't see it."
+        )
+        <p><a href="/">"Go to the home page"</a></p>
+    })
+}
+
+/// Headers for every UI response: pages can't be framed by other sites
+/// (clickjacking the one-click forms, NFR-SEC-012), content types aren't
+/// sniffed, and full URLs don't leak to other sites. A page can set its own
+/// `Referrer-Policy` (the magic-link pages need `no-referrer`).
+#[layer("/")]
+async fn security_headers(cx: &Cx, body: Body, next: Next<'_>) -> Result<Response> {
+    let mut response = next.run(cx, body).await?;
+    let headers = response.headers_mut();
+    headers.insert(CONTENT_SECURITY_POLICY, HeaderValue::from_static("frame-ancestors 'self'"));
+    headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("SAMEORIGIN"));
+    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.entry(REFERRER_POLICY).or_insert(HeaderValue::from_static("same-origin"));
+    Ok(response)
 }

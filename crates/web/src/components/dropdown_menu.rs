@@ -1,7 +1,6 @@
 use topcoat::{
     Result,
-    icon::{icon, iconify::iconify_icon},
-    view::{Attributes, Child, StaticClass, View, attributes, class, component, view},
+    view::{Attributes, Child, StaticClass, View, class, component, view},
 };
 
 /// A floating action menu controlled by a trigger.
@@ -21,7 +20,7 @@ use topcoat::{
 ///             dropdown_menu_item("Duplicate")
 ///             dropdown_menu_separator()
 ///             dropdown_menu_item(
-///                 attrs: attributes! { class="text-destructive" },
+///                 attrs: attributes! { class="text-destructive-ink" },
 ///                 "Delete"
 ///             )
 ///         )
@@ -44,7 +43,12 @@ pub async fn dropdown_menu(
 }
 
 /// Classes that hide the native disclosure marker and show a pointer cursor.
-const TRIGGER: StaticClass = class!("cursor-pointer list-none [&::-webkit-details-marker]:hidden",);
+/// The focus ring is the `--ring` style every control uses.
+const TRIGGER: StaticClass = class!(
+    "cursor-pointer list-none focus-visible:outline-hidden [&::-webkit-details-marker]:hidden \
+     focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 \
+     focus-visible:ring-offset-background",
+);
 
 /// A trigger that opens or closes the dropdown menu.
 ///
@@ -80,37 +84,64 @@ pub async fn dropdown_menu_trigger(
 }
 
 /// Classes for floating menu panels with their own background, border, and text color.
+/// Menus float, so they cast the float shadow.
 const PANEL: StaticClass = class!(
-    "absolute z-50 min-w-40 rounded-lg border border-border bg-popover p-1 \
+    "absolute z-50 min-w-48 rounded-lg border border-border bg-popover p-1 \
      text-popover-foreground shadow-sm",
 );
 
+/// Which edge of the trigger a [`dropdown_menu_content`] lines up with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DropdownMenuAlign {
+    /// The panel's left edge meets the trigger's left edge.
+    #[default]
+    Start,
+    /// The panel's right edge meets the trigger's right edge, for triggers at the
+    /// right of a row or header.
+    End,
+}
+
+impl DropdownMenuAlign {
+    fn classes(self) -> StaticClass {
+        match self {
+            Self::Start => class!("top-full left-0 mt-1"),
+            Self::End => class!("top-full right-0 mt-1"),
+        }
+    }
+}
+
 /// The floating panel of a [`dropdown_menu`], holding the menu's items.
 ///
-/// The panel drops directly below the trigger, aligned to its left edge.
+/// The panel drops directly below the trigger, aligned to its left edge, or to its
+/// right edge with `align: DropdownMenuAlign::End`.
 #[component]
 pub async fn dropdown_menu_content(
+    #[default] align: DropdownMenuAlign,
     #[default] mut attrs: Attributes,
     #[default] child: Child<'_>,
 ) -> Result<impl View> {
     Ok(view! {
-        <div
-            class=(class!(PANEL, "top-full left-0 mt-1", attrs.remove("class")))
-            (attrs)
-        >
+        <div class=(class!(PANEL, align.classes(), attrs.remove("class"))) (attrs)>
             (child)
         </div>
     })
 }
 
-/// Classes for a menu item and its interaction states.
+/// Classes for a menu item and its interaction states. The current item (a link with
+/// `aria-current="page"`) takes the gold wash and the action colour.
 const ITEM: StaticClass = class!(
-    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm \
-     whitespace-nowrap outline-none hover:bg-foreground/5 focus-visible:bg-foreground/5 \
-     active:bg-foreground/10 disabled:pointer-events-none disabled:opacity-50",
+    "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left max-sm:min-h-10 \
+     text-sm whitespace-nowrap text-popover-foreground transition-colors duration-150 \
+     focus-visible:outline-hidden [&_svg]:size-4 [&_svg]:shrink-0 \
+     hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 \
+     focus-visible:ring-ring focus-visible:ring-inset active:bg-primary/15 \
+     aria-[current=page]:bg-accent aria-[current=page]:font-medium \
+     aria-[current=page]:text-primary \
+     disabled:pointer-events-none disabled:opacity-50",
 );
 
-/// One action in a [`dropdown_menu_content`], rendered as a `<button>`.
+/// One action in a [`dropdown_menu_content`], rendered as a `<button>`. Put it in a
+/// `<form method="post">` for a state change.
 #[component]
 pub async fn dropdown_menu_item(
     #[default] mut attrs: Attributes,
@@ -121,84 +152,14 @@ pub async fn dropdown_menu_item(
     })
 }
 
-/// A nested menu that opens from a row in the parent menu.
-///
-/// Its trigger toggles a native `<details>` element without JavaScript. Closing the
-/// parent hides the submenu but preserves its open state. Resetting that state requires
-/// application scripting.
-///
-/// Use `group-open/sub:` classes to style children while the submenu is open. `attrs`
-/// are forwarded to the `<details>`, with extra classes added to its classes.
-///
-/// ```ignore
-/// view! {
-///     dropdown_menu_content(
-///         dropdown_menu_item("Back")
-///         dropdown_menu_sub(
-///             dropdown_menu_sub_trigger("Move to")
-///             dropdown_menu_sub_content(
-///                 dropdown_menu_item("Inbox")
-///                 dropdown_menu_item("Archive")
-///             )
-///         )
-///     )
-/// }
-/// ```
+/// One link in a [`dropdown_menu_content`], rendered as an `<a>`. Pass `href` (and
+/// `aria-current="page"` for the current page) in `attrs`.
 #[component]
-pub async fn dropdown_menu_sub(
+pub async fn dropdown_menu_link(
     #[default] mut attrs: Attributes,
     #[default] child: Child<'_>,
 ) -> Result<impl View> {
-    Ok(view! {
-        <details class=(class!("group/sub relative", attrs.remove("class"))) (attrs)>
-            (child)
-        </details>
-    })
-}
-
-/// The row that opens or closes a submenu.
-///
-/// Pass its label as children. A chevron points toward the submenu, and the row stays
-/// highlighted while it is open. `attrs` are forwarded to the `<summary>`, with extra
-/// classes added to its classes.
-#[component]
-pub async fn dropdown_menu_sub_trigger(
-    #[default] mut attrs: Attributes,
-    #[default] child: Child<'_>,
-) -> Result<impl View> {
-    Ok(view! {
-        <summary
-            class=(class!(
-                ITEM,
-                TRIGGER,
-                "group-open/sub:bg-foreground/5",
-                attrs.remove("class"),
-            ))
-            (attrs)
-        >
-            (child)
-            icon(
-                data: iconify_icon!("lucide:chevron-right"),
-                attrs: attributes! { class="ml-auto size-4" }
-            )
-        </summary>
-    })
-}
-
-/// The submenu panel, positioned to the right of its trigger row.
-#[component]
-pub async fn dropdown_menu_sub_content(
-    #[default] mut attrs: Attributes,
-    #[default] child: Child<'_>,
-) -> Result<impl View> {
-    Ok(view! {
-        <div
-            class=(class!(PANEL, "top-0 left-full ml-1", attrs.remove("class")))
-            (attrs)
-        >
-            (child)
-        </div>
-    })
+    Ok(view! { <a class=(class!(ITEM, attrs.remove("class"))) (attrs)>(child)</a> })
 }
 
 /// A non-interactive heading grouping the items after it.
@@ -210,7 +171,7 @@ pub async fn dropdown_menu_label(
     Ok(view! {
         <p
             class=(class!(
-                "px-2 py-1.5 text-xs font-medium text-muted-foreground",
+                "px-2 py-1.5 text-meta font-medium text-muted-foreground",
                 attrs.remove("class"),
             ))
             (attrs)

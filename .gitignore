@@ -62,6 +62,16 @@
 # the rest of .impeccable/ is per-run scratch
 !/.impeccable/klotho-rubric.md
 
+# Claude Code project config: skills (and their scripts), review agents,
+# hooks, the settings that wire them up, and the MCP servers. Personal
+# settings (.claude/settings.local.json, *.local.md) stay ignored.
+!/.claude/skills/*/SKILL.md
+!/.claude/skills/*/*.sh
+!/.claude/agents/*.md
+!/.claude/hooks/*.sh
+!/.claude/settings.json
+!/.mcp.json
+
 # Never track these, even if a pattern above matches.
 # They come last so they win over the `!` lines.
 

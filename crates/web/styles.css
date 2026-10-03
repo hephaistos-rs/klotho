@@ -4,10 +4,13 @@
    Components and pages refer to tokens only, through Tailwind classes such as
    `bg-primary` or `text-muted-foreground`, never to raw palette colours.
 
-   Colours come from thread dyes: indigo for action and focus, madder for
-   danger, verdigris for success, amber for warnings, and weld, the yellow of
-   the thread, for the thread alone (the header's edge, the current-nav
-   marker and the commit log).
+   Nyx: the Fates are daughters of Night. The header is always night with a
+   spun-gold thread along its edge, in both schemes. In the dark scheme the
+   whole page is night, linen text, and gold for action and focus. In the
+   light scheme ("lamplight") the page is linen and ink, and the gold darkens
+   to bronze so it reads on a light ground. Madder is danger, olive is
+   success, amber is warnings, and the gold thread is for the thread alone
+   (the header's edge, the current-nav marker, the spindle and the commit log).
 
    Light and dark: with no `light` or `dark` class on <html>, the page follows
    `prefers-color-scheme`. The theme toggle (`POST /-/theme`) stores a choice
@@ -39,6 +42,8 @@
 @theme inline {
   --font-sans: "Atkinson Hyperlegible Next", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Atkinson Hyperlegible Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* Page titles and the wordmark only (DESIGN.md "Typography"). */
+  --font-display: "Cormorant Garamond", ui-serif, Georgia, serif;
   --font-weight-semibold: 650;
 
   /* Meta text: details, timestamps, refs and code (13px). */
@@ -46,7 +51,7 @@
   --text-meta--line-height: 1.4;
 
   /* Small radii (DESIGN.md "Shapes"): controls `rounded-md`, menus and
-     dialogs `rounded-lg`, ref chips `rounded-sm`. */
+     popovers `rounded-lg`, ref chips `rounded-sm`. */
   --radius-xs: 0.125rem;
   --radius-sm: 0.125rem;
   --radius-md: 0.25rem;
@@ -89,90 +94,90 @@
   --color-thread: var(--thread);
   --color-thread-ink: var(--thread-ink);
 
-  /* Flat by default: only floating surfaces (menus, dialogs) cast a shadow. */
+  /* Flat by default: only floating surfaces (menus, the select picker) cast a shadow. */
   --shadow-xs: 0 0 #0000;
   --shadow-sm: var(--shadow-float);
   --shadow-md: var(--shadow-float);
   --shadow-lg: var(--shadow-float);
 }
 
-/* Light. Contrast ratios against the ground are in DESIGN.md. */
+/* Light ("lamplight"). Contrast ratios against the ground are in DESIGN.md. */
 :root {
   color-scheme: light;
-  --background: oklch(0.985 0.003 255);
-  --foreground: oklch(0.21 0.025 265);
+  --background: oklch(0.957 0.008 80);
+  --foreground: oklch(0.21 0.01 60);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.21 0.025 265);
+  --card-foreground: oklch(0.21 0.01 60);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.21 0.025 265);
-  --primary: oklch(0.45 0.15 270);
-  --primary-foreground: oklch(0.985 0.003 255);
-  --secondary: oklch(0.955 0.006 260);
-  --secondary-foreground: oklch(0.21 0.025 265);
-  --muted: oklch(0.955 0.006 260);
-  --muted-foreground: oklch(0.48 0.02 265);
-  --accent: oklch(0.94 0.02 270);
-  --accent-foreground: oklch(0.21 0.025 265);
-  --destructive: oklch(0.52 0.19 27);
-  --destructive-foreground: oklch(0.985 0.003 255);
-  --destructive-soft: oklch(0.955 0.02 25);
-  --destructive-ink: oklch(0.45 0.16 27);
-  --success: oklch(0.5 0.11 160);
-  --success-foreground: oklch(0.985 0.003 255);
-  --success-soft: oklch(0.955 0.03 160);
-  --success-ink: oklch(0.4 0.09 160);
-  --warning: oklch(0.62 0.13 58);
-  --warning-foreground: oklch(0.21 0.025 265);
-  --warning-soft: oklch(0.96 0.025 75);
-  --warning-ink: oklch(0.47 0.1 55);
-  --border: oklch(0.9 0.008 260);
-  --input: oklch(0.64 0.015 260);
-  --ring: oklch(0.55 0.16 270);
-  --shell: oklch(0.25 0.06 270);
-  --shell-foreground: oklch(0.95 0.01 265);
-  --shell-muted: oklch(0.78 0.03 265);
-  --thread: oklch(0.8 0.13 82);
-  --thread-ink: oklch(0.6 0.12 70);
-  --shadow-float: 0 8px 24px -8px oklch(0.21 0.025 265 / 20%);
+  --popover-foreground: oklch(0.21 0.01 60);
+  --primary: oklch(0.5 0.1 70);
+  --primary-foreground: oklch(0.99 0.004 80);
+  --secondary: oklch(0.935 0.01 80);
+  --secondary-foreground: oklch(0.21 0.01 60);
+  --muted: oklch(0.935 0.01 80);
+  --muted-foreground: oklch(0.49 0.02 65);
+  --accent: oklch(0.94 0.035 85);
+  --accent-foreground: oklch(0.21 0.01 60);
+  --destructive: oklch(0.5 0.16 28);
+  --destructive-foreground: oklch(0.99 0.004 80);
+  --destructive-soft: oklch(0.955 0.02 30);
+  --destructive-ink: oklch(0.45 0.15 28);
+  --success: oklch(0.47 0.08 155);
+  --success-foreground: oklch(0.99 0.004 80);
+  --success-soft: oklch(0.955 0.025 150);
+  --success-ink: oklch(0.4 0.07 155);
+  --warning: oklch(0.62 0.13 65);
+  --warning-foreground: oklch(0.21 0.01 60);
+  --warning-soft: oklch(0.96 0.03 85);
+  --warning-ink: oklch(0.47 0.1 60);
+  --border: oklch(0.9 0.014 80);
+  --input: oklch(0.62 0.025 75);
+  --ring: oklch(0.55 0.105 72);
+  --shell: oklch(0.17 0.02 295);
+  --shell-foreground: oklch(0.93 0.017 80);
+  --shell-muted: oklch(0.72 0.02 300);
+  --thread: oklch(0.76 0.13 78);
+  --thread-ink: oklch(0.58 0.12 72);
+  --shadow-float: 0 8px 24px -8px oklch(0.21 0.01 60 / 20%);
 }
 
-/* Dark, chosen with the theme toggle. */
+/* Dark ("night"), chosen with the theme toggle. */
 :root.dark {
   color-scheme: dark;
-  --background: oklch(0.165 0.02 268);
-  --foreground: oklch(0.95 0.008 260);
-  --card: oklch(0.2 0.022 268);
-  --card-foreground: oklch(0.95 0.008 260);
-  --popover: oklch(0.2 0.022 268);
-  --popover-foreground: oklch(0.95 0.008 260);
-  --primary: oklch(0.75 0.12 272);
-  --primary-foreground: oklch(0.17 0.03 270);
-  --secondary: oklch(0.235 0.022 268);
-  --secondary-foreground: oklch(0.95 0.008 260);
-  --muted: oklch(0.235 0.022 268);
-  --muted-foreground: oklch(0.72 0.02 265);
-  --accent: oklch(0.26 0.03 270);
-  --accent-foreground: oklch(0.95 0.008 260);
-  --destructive: oklch(0.7 0.16 25);
-  --destructive-foreground: oklch(0.17 0.03 270);
-  --destructive-soft: oklch(0.26 0.05 25);
-  --destructive-ink: oklch(0.82 0.09 25);
-  --success: oklch(0.74 0.12 160);
-  --success-foreground: oklch(0.17 0.03 270);
-  --success-soft: oklch(0.26 0.04 160);
-  --success-ink: oklch(0.82 0.1 160);
+  --background: oklch(0.17 0.02 295);
+  --foreground: oklch(0.93 0.017 80);
+  --card: oklch(0.205 0.024 295);
+  --card-foreground: oklch(0.93 0.017 80);
+  --popover: oklch(0.205 0.024 295);
+  --popover-foreground: oklch(0.93 0.017 80);
+  --primary: oklch(0.76 0.13 78);
+  --primary-foreground: oklch(0.19 0.025 75);
+  --secondary: oklch(0.24 0.03 295);
+  --secondary-foreground: oklch(0.93 0.017 80);
+  --muted: oklch(0.24 0.03 295);
+  --muted-foreground: oklch(0.72 0.03 300);
+  --accent: oklch(0.27 0.035 295);
+  --accent-foreground: oklch(0.93 0.017 80);
+  --destructive: oklch(0.72 0.13 28);
+  --destructive-foreground: oklch(0.19 0.025 75);
+  --destructive-soft: oklch(0.27 0.05 25);
+  --destructive-ink: oklch(0.83 0.08 28);
+  --success: oklch(0.79 0.1 155);
+  --success-foreground: oklch(0.19 0.025 75);
+  --success-soft: oklch(0.26 0.04 155);
+  --success-ink: oklch(0.85 0.08 155);
   --warning: oklch(0.76 0.14 62);
-  --warning-foreground: oklch(0.17 0.03 270);
+  --warning-foreground: oklch(0.19 0.025 75);
   --warning-soft: oklch(0.27 0.045 60);
   --warning-ink: oklch(0.84 0.1 65);
-  --border: oklch(0.3 0.025 268);
-  --input: oklch(0.52 0.025 268);
-  --ring: oklch(0.68 0.13 272);
-  --shell: oklch(0.125 0.025 268);
-  --shell-foreground: oklch(0.95 0.008 260);
-  --shell-muted: oklch(0.74 0.025 265);
-  --thread: oklch(0.8 0.13 82);
-  --thread-ink: oklch(0.8 0.13 82);
+  --border: oklch(0.31 0.035 295);
+  --input: oklch(0.52 0.035 300);
+  --ring: oklch(0.8 0.12 80);
+  --shell: oklch(0.13 0.015 295);
+  --shell-foreground: oklch(0.93 0.017 80);
+  --shell-muted: oklch(0.72 0.03 300);
+  --thread: oklch(0.78 0.13 80);
+  --thread-ink: oklch(0.78 0.13 80);
   --shadow-float: 0 8px 24px -8px oklch(0 0 0 / 50%);
 }
 
@@ -180,40 +185,40 @@
 @media (prefers-color-scheme: dark) {
   :root:not(.light) {
     color-scheme: dark;
-    --background: oklch(0.165 0.02 268);
-    --foreground: oklch(0.95 0.008 260);
-    --card: oklch(0.2 0.022 268);
-    --card-foreground: oklch(0.95 0.008 260);
-    --popover: oklch(0.2 0.022 268);
-    --popover-foreground: oklch(0.95 0.008 260);
-    --primary: oklch(0.75 0.12 272);
-    --primary-foreground: oklch(0.17 0.03 270);
-    --secondary: oklch(0.235 0.022 268);
-    --secondary-foreground: oklch(0.95 0.008 260);
-    --muted: oklch(0.235 0.022 268);
-    --muted-foreground: oklch(0.72 0.02 265);
-    --accent: oklch(0.26 0.03 270);
-    --accent-foreground: oklch(0.95 0.008 260);
-    --destructive: oklch(0.7 0.16 25);
-    --destructive-foreground: oklch(0.17 0.03 270);
-    --destructive-soft: oklch(0.26 0.05 25);
-    --destructive-ink: oklch(0.82 0.09 25);
-    --success: oklch(0.74 0.12 160);
-    --success-foreground: oklch(0.17 0.03 270);
-    --success-soft: oklch(0.26 0.04 160);
-    --success-ink: oklch(0.82 0.1 160);
+    --background: oklch(0.17 0.02 295);
+    --foreground: oklch(0.93 0.017 80);
+    --card: oklch(0.205 0.024 295);
+    --card-foreground: oklch(0.93 0.017 80);
+    --popover: oklch(0.205 0.024 295);
+    --popover-foreground: oklch(0.93 0.017 80);
+    --primary: oklch(0.76 0.13 78);
+    --primary-foreground: oklch(0.19 0.025 75);
+    --secondary: oklch(0.24 0.03 295);
+    --secondary-foreground: oklch(0.93 0.017 80);
+    --muted: oklch(0.24 0.03 295);
+    --muted-foreground: oklch(0.72 0.03 300);
+    --accent: oklch(0.27 0.035 295);
+    --accent-foreground: oklch(0.93 0.017 80);
+    --destructive: oklch(0.72 0.13 28);
+    --destructive-foreground: oklch(0.19 0.025 75);
+    --destructive-soft: oklch(0.27 0.05 25);
+    --destructive-ink: oklch(0.83 0.08 28);
+    --success: oklch(0.79 0.1 155);
+    --success-foreground: oklch(0.19 0.025 75);
+    --success-soft: oklch(0.26 0.04 155);
+    --success-ink: oklch(0.85 0.08 155);
     --warning: oklch(0.76 0.14 62);
-    --warning-foreground: oklch(0.17 0.03 270);
+    --warning-foreground: oklch(0.19 0.025 75);
     --warning-soft: oklch(0.27 0.045 60);
     --warning-ink: oklch(0.84 0.1 65);
-    --border: oklch(0.3 0.025 268);
-    --input: oklch(0.52 0.025 268);
-    --ring: oklch(0.68 0.13 272);
-    --shell: oklch(0.125 0.025 268);
-    --shell-foreground: oklch(0.95 0.008 260);
-    --shell-muted: oklch(0.74 0.025 265);
-    --thread: oklch(0.8 0.13 82);
-    --thread-ink: oklch(0.8 0.13 82);
+    --border: oklch(0.31 0.035 295);
+    --input: oklch(0.52 0.035 300);
+    --ring: oklch(0.8 0.12 80);
+    --shell: oklch(0.13 0.015 295);
+    --shell-foreground: oklch(0.93 0.017 80);
+    --shell-muted: oklch(0.72 0.03 300);
+    --thread: oklch(0.78 0.13 80);
+    --thread-ink: oklch(0.78 0.13 80);
     --shadow-float: 0 8px 24px -8px oklch(0 0 0 / 50%);
   }
 }
@@ -222,6 +227,10 @@
   :root {
     /* Native checkboxes, radios and range inputs take the action colour. */
     accent-color: var(--primary);
+    /* Lucide `check`, the mask for the select picker's checked option
+       (`components/select.rs`). Kept here so the page needs no inline style.
+       The SVG namespace is percent-encoded; it is never fetched. */
+    --select-checkmark: url("data:image/svg+xml,%3Csvg xmlns='http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='black' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M20 6L9 17l-5-5'/%3E%3C/svg%3E");
   }
 
   body {
@@ -237,6 +246,36 @@
   samp,
   pre {
     @apply font-mono;
+  }
+
+  /* Long lines scroll inside their own block, never the page (rubric R16). */
+  pre {
+    @apply max-w-full overflow-x-auto;
+  }
+
+  /* A visible focus ring for anything a component doesn't style itself:
+     links in prose, `<summary>`, scroll containers. Components that draw
+     their own `focus-visible:ring-*` turn the outline off with `focus-visible:outline-hidden`. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* The one text-link style: a bare `<a>` in running text takes the action
+     colour (bronze by lamplight, gold at night), 500, with a visible
+     underline that thickens on hover. Focus uses the `:focus-visible` ring
+     above. Links with their own classes (navigation, buttons, rows) style
+     themselves. */
+  a:not([class]) {
+    @apply rounded-sm font-medium text-primary underline decoration-primary/60 decoration-1 underline-offset-4 transition-colors duration-150;
+  }
+
+  a:not([class]):hover {
+    @apply decoration-primary decoration-2;
+  }
+
+  summary {
+    cursor: pointer;
   }
 
   /* Numbers line up in lists and tables. */

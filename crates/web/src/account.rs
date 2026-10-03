@@ -12,10 +12,11 @@ use topcoat::context::Cx;
 use topcoat::router::content::Form;
 use topcoat::router::error::{SeeOther, see_other};
 use topcoat::router::{StatusCode, page, query_params, route};
-use topcoat::view::{View, component, view};
+use topcoat::view::{View, attributes, component, view};
 
+use crate::components::button::button;
 use crate::session::{core, current_user, safe_return_to, sign_in, sign_out};
-use crate::ui::{field, form_error, page_title};
+use crate::ui::{field, form_actions, form_error, page_header};
 
 #[query_params(error = bad_request)]
 struct LoginQuery {
@@ -29,7 +30,15 @@ pub async fn login_page(cx: &Cx) -> Result<impl View> {
     if current_user(cx).await.is_some() {
         return Err(see_other(&return_to).into());
     }
-    Ok(view! { login_form(return_to: return_to, login: String::new(), error: None) })
+    let can_register = core(cx).registration() == Registration::Open;
+    Ok(view! {
+        login_form(
+            return_to: return_to,
+            login: String::new(),
+            error: None,
+            can_register: can_register
+        )
+    })
 }
 
 #[derive(Deserialize)]
@@ -47,29 +56,58 @@ pub async fn login_submit(cx: &Cx, Form(form): Form<LoginForm>) -> Result<impl V
             sign_in(cx, &user).await?;
             Err(see_other(&return_to).into())
         }
-        Err(Error::InvalidCredentials) => Ok(view! {
-            (StatusCode::UNAUTHORIZED)
-            login_form(
-                return_to: return_to,
-                login: form.login,
-                error: Some("Incorrect username or password.".to_owned()),
-            )
-        }),
+        Err(Error::InvalidCredentials) => {
+            let can_register = core(cx).registration() == Registration::Open;
+            Ok(view! {
+                (StatusCode::UNAUTHORIZED)
+                login_form(
+                    return_to: return_to,
+                    login: form.login,
+                    error: Some("Incorrect username or password.".to_owned()),
+                    can_register: can_register
+                )
+            })
+        }
         Err(err) => Err(err.into()),
     }
 }
 
 #[component]
-async fn login_form(return_to: String, login: String, error: Option<String>) -> Result<impl View> {
+async fn login_form(
+    return_to: String,
+    login: String,
+    error: Option<String>,
+    can_register: bool,
+) -> Result<impl View> {
     Ok(view! {
-        page_title(title: "Sign in")
-        <form method="post" action="/-/login" class="mt-6 max-w-sm space-y-4">
-            form_error(error: error)
-            <input type="hidden" name="return_to" value=(return_to)>
-            field(name: "login", label: "Username", kind: "text", value: &login, autocomplete: "username")
-            field(name: "password", label: "Password", kind: "password", value: "", autocomplete: "current-password")
-            <button type="submit" class="rounded bg-gray-900 px-4 py-2 text-white">"Sign in"</button>
-        </form>
+        <div class="max-w-md">
+            page_header(title: "Sign in")
+            <form method="post" action="/-/login" class="flex flex-col gap-4">
+                form_error(error: error)
+                <input type="hidden" name="return_to" value=(return_to)>
+                field(
+                    name: "login",
+                    label: "Username",
+                    kind: "text",
+                    value: &login,
+                    autocomplete: "username"
+                )
+                field(
+                    name: "password",
+                    label: "Password",
+                    kind: "password",
+                    value: "",
+                    autocomplete: "current-password"
+                )
+                form_actions(button(attrs: attributes! { type="submit" }, "Sign in"))
+            </form>
+            if can_register {
+                <p class="mt-6 text-sm text-muted-foreground">
+                    "No account yet? "
+                    <a href="/-/register">"Create one"</a>
+                </p>
+            }
+        </div>
     })
 }
 
@@ -83,7 +121,13 @@ pub async fn register_page(cx: &Cx) -> Result<impl View> {
     let invite = topcoat::router::query_params::<RegisterQuery>(cx)?.invite.clone();
     let mode = core(cx).registration();
     Ok(view! {
-        register_form(mode: mode, invite: invite, username: String::new(), email: String::new(), error: None)
+        register_form(
+            mode: mode,
+            invite: invite,
+            username: String::new(),
+            email: String::new(),
+            error: None
+        )
     })
 }
 
@@ -117,17 +161,56 @@ pub async fn register_submit(cx: &Cx, Form(form): Form<RegisterForm>) -> Result<
             | Error::InvalidInvite
             | Error::RegistrationClosed),
         ) => Ok(view! {
-            if !matches!(err, Error::RegistrationClosed) { (StatusCode::UNPROCESSABLE_ENTITY) }
+            if !matches!(err, Error::RegistrationClosed) {
+                (StatusCode::UNPROCESSABLE_ENTITY)
+            }
             register_form(
                 mode: mode,
                 invite: form.invite,
                 username: form.username,
                 email: form.email,
-                error: Some(err.to_string()),
+                error: Some(RegisterError::from(&err))
             )
         }),
         Err(err) => Err(err.into()),
     }
+}
+
+/// Which part of the registration form an error is about.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ErrorAt {
+    Form,
+    Username,
+    Email,
+}
+
+/// A registration error, worded as a sentence and shown next to the field it
+/// is about, or above the form when it isn't about one field.
+struct RegisterError {
+    at: ErrorAt,
+    message: String,
+}
+
+impl From<&Error> for RegisterError {
+    fn from(err: &Error) -> Self {
+        let at = match err {
+            Error::InvalidName(_) | Error::OwnerExists(_) => ErrorAt::Username,
+            Error::EmailExists => ErrorAt::Email,
+            _ => ErrorAt::Form,
+        };
+        Self { at, message: sentence(&err.to_string()) }
+    }
+}
+
+/// Capitalises a message and ends it with a full stop.
+fn sentence(message: &str) -> String {
+    let mut chars = message.chars();
+    let mut out: String = chars.next().map(|first| first.to_uppercase().collect()).unwrap_or_default();
+    out.push_str(chars.as_str());
+    if !out.ends_with(['.', '!', '?']) {
+        out.push('.');
+    }
+    out
 }
 
 #[component]
@@ -136,7 +219,7 @@ async fn register_form(
     invite: Option<String>,
     username: String,
     email: String,
-    error: Option<String>,
+    error: Option<RegisterError>,
 ) -> Result<impl View> {
     let open = match mode {
         Registration::Open => true,
@@ -148,29 +231,57 @@ async fn register_form(
     } else {
         "Registration is closed. An administrator can create an account for you."
     };
+    let error_at =
+        |at: ErrorAt| error.as_ref().filter(|error| error.at == at).map(|error| error.message.clone());
+    let form_message = error_at(ErrorAt::Form);
+    let username_error = error_at(ErrorAt::Username);
+    let email_error = error_at(ErrorAt::Email);
     Ok(view! {
-        page_title(title: "Create an account")
-        if open {
-            <form method="post" action="/-/register" class="mt-6 max-w-sm space-y-4">
-                form_error(error: error)
-                if let Some(invite) = invite {
-                    <input type="hidden" name="invite" value=(invite)>
-                }
-                field(name: "username", label: "Username", kind: "text", value: &username, autocomplete: "username")
-                field(name: "email", label: "Email", kind: "email", value: &email, autocomplete: "email")
-                field(
-                    name: "password",
-                    label: "Password (at least 8 characters)",
-                    kind: "password",
-                    value: "",
-                    autocomplete: "new-password",
-                )
-                <button type="submit" class="rounded bg-gray-900 px-4 py-2 text-white">"Create account"</button>
-            </form>
-        } else {
-            (StatusCode::FORBIDDEN)
-            <p class="mt-4 text-gray-600">(closed_message)</p>
-        }
+        <div class="max-w-md">
+            if open {
+                page_header(title: "Create an account")
+                <form method="post" action="/-/register" class="flex flex-col gap-4">
+                    form_error(error: form_message)
+                    if let Some(invite) = invite {
+                        <input type="hidden" name="invite" value=(invite)>
+                    }
+                    field(
+                        name: "username",
+                        label: "Username",
+                        kind: "text",
+                        value: &username,
+                        autocomplete: "username",
+                        error: username_error.as_deref()
+                    )
+                    field(
+                        name: "email",
+                        label: "Email",
+                        kind: "email",
+                        value: &email,
+                        autocomplete: "email",
+                        error: email_error.as_deref()
+                    )
+                    field(
+                        name: "password",
+                        label: "Password",
+                        kind: "password",
+                        value: "",
+                        autocomplete: "new-password",
+                        hint: "At least 8 characters."
+                    )
+                    form_actions(
+                        button(attrs: attributes! { type="submit" }, "Create account")
+                    )
+                </form>
+            } else {
+                (StatusCode::FORBIDDEN)
+                page_header(title: "Create an account", description: closed_message)
+            }
+            <p class="mt-6 text-sm text-muted-foreground">
+                "Already have an account? "
+                <a href="/-/login">"Sign in"</a>
+            </p>
+        </div>
     })
 }
 

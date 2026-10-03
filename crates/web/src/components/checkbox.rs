@@ -6,11 +6,13 @@ use topcoat::{
 
 /// Classes for the native checkbox input and its checked state.
 const CHECKBOX: StaticClass = class!(
-    "peer size-4 shrink-0 appearance-none rounded-[4px] border border-border \
-     bg-background transition-colors outline-none \
-     checked:border-primary checked:bg-primary \
+    "peer size-4 shrink-0 cursor-pointer appearance-none rounded-sm border border-input \
+     bg-card transition-colors duration-150 focus-visible:outline-hidden hover:border-muted-foreground \
+     checked:border-primary checked:bg-primary checked:hover:bg-primary/90 \
+     active:bg-accent checked:active:bg-primary/80 \
      focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 \
-     focus-visible:ring-offset-background disabled:pointer-events-none",
+     focus-visible:ring-offset-background aria-invalid:border-destructive \
+     disabled:pointer-events-none disabled:cursor-not-allowed disabled:bg-muted",
 );
 
 /// A styled native checkbox.
@@ -32,11 +34,14 @@ const CHECKBOX: StaticClass = class!(
 pub async fn checkbox(#[default] mut attrs: Attributes) -> Result<impl View> {
     // The checkmark cannot be drawn by the `<input>` itself, which renders no
     // children or pseudo-elements: it is a sibling icon overlaid on the
-    // control, revealed by the input's `peer` state while checked.
+    // control, revealed by the input's `peer` state while checked. The 16px
+    // box sits centred in a 24px wrapper, which keeps a 24px target area
+    // clear around it (WCAG 2.5.8).
     Ok(view! {
         <span
             class=(class!(
-                "peer relative inline-flex shrink-0 has-[:disabled]:opacity-50",
+                "peer relative inline-flex size-6 shrink-0 items-center justify-center \
+                 has-[:disabled]:opacity-50",
                 attrs.remove("class"),
             ))
         >

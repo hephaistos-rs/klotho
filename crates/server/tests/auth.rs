@@ -103,6 +103,53 @@ async fn sign_in_create_a_token_and_sign_out() {
 }
 
 #[tokio::test]
+async fn the_token_form_keeps_its_input_and_revoking_asks_first() {
+    let (_dir, _core, app) = app().await;
+    let cookie = sign_in(&app).await;
+
+    // A rejected form comes back filled in, with the error on the scopes.
+    let fields = "name=ci+runner&expires_days=30";
+    let response = app.clone().oneshot(form("/-/settings/tokens", Some(&cookie), fields)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let page = body(response).await;
+    assert!(page.contains(r#"value="ci runner""#), "{page}");
+    assert!(page.contains(r#"aria-describedby="token-scopes-error""#), "{page}");
+
+    // The page that shows the secret is never cached.
+    let fields = "name=ci+runner&repo_read=on";
+    let response = app.clone().oneshot(form("/-/settings/tokens", Some(&cookie), fields)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+
+    // Revoke is a link to a confirmation; nothing is revoked until the form posts.
+    let page = body(app.clone().oneshot(get("/-/settings/tokens", Some(&cookie))).await.unwrap()).await;
+    let start = page.find("?revoke=").expect("a revoke link") + "?revoke=".len();
+    let id: String = page[start..].chars().take_while(char::is_ascii_digit).collect();
+    let confirm = format!("/-/settings/tokens?revoke={id}");
+    let page = body(app.clone().oneshot(get(&confirm, Some(&cookie))).await.unwrap()).await;
+    assert!(page.contains("Revoke token") && page.contains("ci runner"), "{page}");
+    let unknown =
+        body(app.clone().oneshot(get("/-/settings/tokens?revoke=999999", Some(&cookie))).await.unwrap())
+            .await;
+    assert!(!unknown.contains("Revoke token"), "{unknown}");
+
+    let revoke = format!("/-/settings/tokens/{id}/revoke");
+    let response = app.clone().oneshot(form(&revoke, Some(&cookie), "")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()[header::LOCATION], format!("/-/settings/tokens?revoked={id}"));
+    let page = body(
+        app.clone().oneshot(get(&format!("/-/settings/tokens?revoked={id}"), Some(&cookie))).await.unwrap(),
+    )
+    .await;
+    assert!(page.contains("Token revoked.") && page.contains("You have no tokens yet."), "{page}");
+
+    // Revoking it again finds nothing, and doesn't claim success.
+    let response = app.clone().oneshot(form(&revoke, Some(&cookie), "")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()[header::LOCATION], "/-/settings/tokens");
+}
+
+#[tokio::test]
 async fn a_cross_site_form_post_with_the_session_cookie_is_refused() {
     let (_dir, core, app) = app().await;
     let cookie = sign_in(&app).await;
@@ -138,6 +185,7 @@ async fn the_theme_form_sets_a_cookie_and_the_page_follows_it() {
 
     let page = body(app.clone().oneshot(get("/-/login", Some(&cookie))).await.unwrap()).await;
     assert!(page.contains(r#"class="dark""#), "{page}");
+    assert!(page.contains(r#"<meta name="color-scheme" content="dark">"#), "{page}");
     assert!(page.contains(r#"aria-pressed="true""#) && page.contains(r#"value="dark""#), "{page}");
 
     // An outside `return_to` goes home instead (no open redirect).
@@ -152,6 +200,26 @@ async fn the_theme_form_sets_a_cookie_and_the_page_follows_it() {
     let response = app.clone().oneshot(form("/-/theme", Some(&cookie), "theme=system")).await.unwrap();
     let set_cookie = response.headers()[header::SET_COOKIE].to_str().unwrap();
     assert!(set_cookie.starts_with("klotho_theme=;") && set_cookie.contains("Max-Age=0"), "{set_cookie}");
+}
+
+#[tokio::test]
+async fn an_unknown_page_is_a_branded_404_with_the_security_headers() {
+    let (_dir, _core, app) = app().await;
+
+    let response = app.clone().oneshot(get("/no/such/page", None)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.headers()[header::CONTENT_SECURITY_POLICY], "frame-ancestors 'self'");
+    let page = body(response).await;
+    assert!(page.contains("Page not found") && page.contains(r#"href="/""#), "{page}");
+
+    // Every page: no framing by other sites (NFR-SEC-012), no sniffing.
+    let response = app.oneshot(get("/-/login", None)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert_eq!(headers[header::CONTENT_SECURITY_POLICY], "frame-ancestors 'self'");
+    assert_eq!(headers[header::X_FRAME_OPTIONS], "SAMEORIGIN");
+    assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    assert_eq!(headers[header::REFERRER_POLICY], "same-origin");
 }
 
 #[tokio::test]

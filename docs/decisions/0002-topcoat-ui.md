@@ -50,6 +50,8 @@ So we get one UI technology (Rust components), server rendering, and no Node too
 
 Tailwind through Topcoat's `tailwind` feature (no Node), plus Topcoat UI components copied in with `topcoat ui add` and edited freely. They are our code once copied, so this isn't a dependency on a component library.
 
+> **Superseded in part by [ADR 0005](0005-tailwind-and-design-system.md)** (2026-10-03), which sets the design tokens, the Topcoat features, the pinned Tailwind CLI, the vendored fonts and icons, and the `/-/theme` exception to API parity.
+
 ### Assets inside the single binary
 
 Topcoat writes its asset bundle to a directory *after* building the program: `topcoat asset bundle` scans the built binary for `asset!()` declarations. That includes Topcoat's own runtime script and the generated Tailwind stylesheet. By default the binary then loads that directory from next to itself, which breaks NFR-OPS-001 (a single binary).

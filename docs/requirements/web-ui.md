@@ -73,3 +73,9 @@ The UI is a Topcoat app (crate `klotho-web`) that axum mounts as its fallback se
 ## Conflicts with the current implementation
 
 Checked 2026-10-02, during Phase 3: no conflicts. The browse pages don't exist yet. The API's `raw` endpoint serves blobs as `application/octet-stream`, which already fits FR-UI-004's intent.
+
+Checked again 2026-10-03, after the design-system run ([ADR 0005](../decisions/0005-tailwind-and-design-system.md)). Still no conflicts:
+- **NFR-UI-005 is met.** Pages follow the system scheme, and a footer form (`POST /-/theme`, which sets a cookie) switches to light or dark without JavaScript. It has no API endpoint; that exception to FR-API-004 is recorded in the ADR.
+- **NFR-UI-001 is what the components and pages were reviewed against.** Contrast was measured for every token pair, focus is visible (including in forced-colors mode), labels and errors are tied to their fields, and every page has landmarks and a skip link. No automated checker runs yet. One known gap: on the register form, email and password errors show above the form rather than on their field, until `klotho-core` reports which field failed.
+- **NFR-UI-002 and NFR-UI-003.** Every page, menu and confirmation works without JavaScript. Pages were checked at 390 px and 1280 px, with no sideways scrolling.
+- **FR-UI-052.** The stylesheet, both font families and their `@font-face` CSS are served from the binary at hashed, `immutable` URLs, and `cargo xtask dist` checks this. Icons are inline SVG.

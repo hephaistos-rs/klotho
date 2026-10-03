@@ -1,69 +1,75 @@
 use topcoat::{
     Result,
-    view::{Attributes, Child, Class, StaticClass, View, class, component, view},
+    icon::{icon, iconify::iconify_icon},
+    view::{Attributes, Child, StaticClass, View, class, component, view},
 };
 
 /// The visual style of a [`badge`].
 ///
-/// [`Default`] is `BadgeVariant::Primary`, used when no variant is given.
+/// [`Default`] is `BadgeVariant::Secondary`, used when no variant is given.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum BadgeVariant {
-    /// The primary-filled badge for highlighted statuses.
+    /// A quiet grey fill for neutral statuses ("Admin", "Private").
     #[default]
-    Primary,
-    /// A muted, tinted fill for neutral statuses.
     Secondary,
-    /// A hairline-bordered badge on the page background.
-    Outline,
-    /// A destructive-filled badge for errors and warnings.
+    /// Madder wash and ink: "Expired", "Revoked", "Failed".
     Destructive,
+    /// Olive wash and ink: "Active", "Merged", "Passing".
+    Success,
+    /// Amber wash and ink. [`badge`] adds a warning icon, so it is never colour
+    /// alone.
+    Warning,
+    /// A ref chip: a branch, tag or scope name in mono. Not for statuses. A long
+    /// name is cut with an ellipsis rather than widening the page, so pass the full
+    /// name in `title` too: `attrs: attributes! { title=(name.clone()) }`.
+    Ref,
 }
 
 impl BadgeVariant {
-    /// Classes for the variant, including its border color. Keep border colors out of
-    /// the shared base to avoid conflicting classes.
+    /// Classes for the variant, including its shape, border and colours. Keep them out
+    /// of the shared base to avoid conflicting classes.
     fn classes(self) -> StaticClass {
         match self {
-            Self::Primary => class!("border-transparent bg-primary text-primary-foreground"),
-            Self::Secondary => class!("border-transparent bg-foreground/5 text-foreground"),
-            Self::Outline => class!("border-border text-foreground"),
-            Self::Destructive => {
-                class!("border-transparent bg-destructive text-destructive-foreground")
-            }
+            Self::Secondary => class!(
+                "inline-flex shrink-0 items-center justify-center gap-1 rounded-md border-transparent bg-secondary px-2 py-0.5 font-medium \
+                 text-secondary-foreground",
+            ),
+            Self::Destructive => class!(
+                "inline-flex shrink-0 items-center justify-center gap-1 rounded-md border-transparent bg-destructive-soft px-2 py-0.5 font-medium \
+                 text-destructive-ink",
+            ),
+            Self::Success => class!(
+                "inline-flex shrink-0 items-center justify-center gap-1 rounded-md border-transparent bg-success-soft px-2 py-0.5 font-medium \
+                 text-success-ink",
+            ),
+            Self::Warning => class!(
+                "inline-flex shrink-0 items-center justify-center gap-1 rounded-md border-transparent bg-warning-soft px-2 py-0.5 font-medium \
+                 text-warning-ink",
+            ),
+            Self::Ref => class!(
+                "inline-block min-w-0 overflow-hidden text-ellipsis align-bottom rounded-sm border-border bg-muted px-1.5 py-px font-mono font-medium \
+                 text-foreground",
+            ),
         }
     }
 }
 
 /// Classes shared by badge variants. A border reserves the same space in every variant.
 const BASE: StaticClass = class!(
-    "inline-flex w-fit shrink-0 items-center justify-center gap-1 rounded-md \
-     border px-2 py-0.5 text-xs font-medium whitespace-nowrap",
+    "w-fit max-w-full border \
+     text-meta whitespace-nowrap [&>svg]:size-3.5 [&>svg]:shrink-0",
 );
 
-/// Builds the full class list for a badge of the given `variant`.
+/// A small label for a status, a count or a ref.
 ///
-/// Use it to give badge styling to another element, such as a link:
-///
-/// ```ignore
-/// view! {
-///     <a href="/releases/v2" class=(badge_variants(BadgeVariant::Outline))>"v2.0"</a>
-/// }
-/// ```
-#[must_use]
-pub fn badge_variants(variant: BadgeVariant) -> Class<(StaticClass, StaticClass)> {
-    class!(BASE, variant.classes())
-}
-
-/// A small label for a status or count.
-///
-/// `variant` defaults to `Primary`. Pass the label as children and extra attributes
-/// through `attrs`. Attributes go on the `<span>`, with classes added to its classes.
-/// Use [`badge_variants`] to apply the same styling to another element.
+/// `variant` defaults to `Secondary`. Pass the label as children (sentence case) and
+/// extra attributes through `attrs`. Attributes go on the `<span>`, with classes added
+/// to its classes.
 ///
 /// ```ignore
 /// view! {
-///     badge(variant: BadgeVariant::Destructive, "Failed")
+///     badge(variant: BadgeVariant::Destructive, "Expired")
+///     badge(variant: BadgeVariant::Ref, "refs/heads/main")
 /// }
 /// ```
 #[component]
@@ -74,6 +80,9 @@ pub async fn badge(
 ) -> Result<impl View> {
     Ok(view! {
         <span class=(class!(BASE, variant.classes(), attrs.remove("class"))) (attrs)>
+            if variant == BadgeVariant::Warning {
+                icon(data: iconify_icon!("lucide:triangle-alert"))
+            }
             (child)
         </span>
     })

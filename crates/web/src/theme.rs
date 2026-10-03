@@ -1,7 +1,8 @@
 //! Fonts and the colour scheme (DESIGN.md, ADR 0005).
 //!
 //! The fonts are Fontsource's variable WOFF2 files for Atkinson Hyperlegible
-//! Next and Mono, vendored in `assets/fonts` (pinned to 5.3.0, OFL) and
+//! Next and Mono and Cormorant Garamond, vendored in `assets/fonts` (pinned to
+//! 5.3.0, OFL) and
 //! bundled as assets, so release builds embed them and pages make no
 //! third-party requests.
 //!
@@ -111,6 +112,27 @@ pub const MONO: Font = font! {
     }
 };
 
+/// The display serif, for page titles and the wordmark only.
+pub const DISPLAY: Font = font! {
+    "Cormorant Garamond",
+    @font-face {
+        src: url(asset!("assets/fonts/cormorant-garamond-latin-wght-normal.woff2")
+        ) format("woff2") tech("variations");
+        font-weight: 300 700;
+        font-style: normal;
+        font-display: swap;
+        unicode-range: LATIN;
+    }
+    @font-face {
+        src: url(asset!("assets/fonts/cormorant-garamond-latin-ext-wght-normal.woff2")
+        ) format("woff2") tech("variations");
+        font-weight: 300 700;
+        font-style: normal;
+        font-display: swap;
+        unicode-range: LATIN_EXT;
+    }
+};
+
 const COOKIE: &str = "klotho_theme";
 
 /// The reader's colour scheme choice.
@@ -149,6 +171,16 @@ impl Theme {
             Theme::System => None,
             Theme::Light => Some("light"),
             Theme::Dark => Some("dark"),
+        }
+    }
+
+    /// The `color-scheme` meta value, so the browser paints the canvas and
+    /// native controls in the chosen scheme before the stylesheet arrives.
+    pub fn color_scheme(self) -> &'static str {
+        match self {
+            Theme::System => "light dark",
+            Theme::Light => "light",
+            Theme::Dark => "dark",
         }
     }
 

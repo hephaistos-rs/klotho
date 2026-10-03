@@ -14,6 +14,7 @@
 | [decisions/0002-topcoat-ui.md](decisions/0002-topcoat-ui.md) | Web UI: server-rendered with Topcoat, mounted inside axum, assets embedded in the binary |
 | [decisions/0003-data-and-file-storage.md](decisions/0003-data-and-file-storage.md) | One data directory; git repositories on local disk; other files (LFS, releases, attachments) local or in S3 |
 | [decisions/0004-native-git-transport.md](decisions/0004-native-git-transport.md) | All git work in-process with gitoxide, including the server side of the protocol; Klotho never runs the `git` program (supersedes ADR 0001's git section) |
+| [decisions/0005-tailwind-and-design-system.md](decisions/0005-tailwind-and-design-system.md) | Design system: Tailwind tokens with light and dark themes, vendored Topcoat UI components, pinned Tailwind CLI, self-hosted fonts and Lucide icons in the binary, the `/-/theme` exception to API parity (amends ADR 0002's styling section). The look itself is in the root [DESIGN.md](../DESIGN.md) |
 
 ## Design
 

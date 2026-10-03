@@ -8,6 +8,7 @@ Background:
 - [ADR 0002](docs/decisions/0002-topcoat-ui.md): why the UI is server-rendered with Topcoat (replaces the SvelteKit SPA).
 - [ADR 0003](docs/decisions/0003-data-and-file-storage.md): the data directory, and why only non-git files can go to S3.
 - [ADR 0004](docs/decisions/0004-native-git-transport.md): why Klotho does all git work in-process with gitoxide and never runs the `git` program.
+- [ADR 0005](docs/decisions/0005-tailwind-and-design-system.md) and [DESIGN.md](DESIGN.md): the design system (tokens, components, fonts, icons) and the look every page follows.
 - [API endpoints](docs/design/api-endpoints.md) and [auth flows](docs/design/auth-flows.md): the designs the phases implement.
 
 Versions are the latest at the time of writing (2026-09-30). Check crates.io (and the Mermaid release) when you add each one.
@@ -43,9 +44,12 @@ klotho/
 │   │   │   ├── lib.rs          #   router(state) -> topcoat Router (app context, sessions, assets)
 │   │   │   ├── app/            #   pages; the module tree is the URL tree (Topcoat module routing)
 │   │   │   ├── components/     #   Topcoat UI components (copied in, ours to edit) + our own
+│   │   │   ├── ui.rs           #   the shell (header, footer, theme switch) and shared page helpers
+│   │   │   ├── theme.rs        #   fonts (font!/asset!), the light/dark/system cookie, POST /-/theme
 │   │   │   └── session.rs      #   current_user(cx), require_sudo(cx)
-│   │   ├── assets/             #   vendored JS (mermaid.esm.min.mjs, passkey.js), icons, images
-│   │   ├── styles.css          #   Tailwind entry + theme (written by `topcoat ui init`)
+│   │   ├── assets/             #   vendored fonts (fonts/, OFL), later JS (mermaid.esm.min.mjs, passkey.js) and images
+│   │   ├── icons/              #   the vendored Lucide Iconify set, its version and licence (ADR 0005)
+│   │   ├── styles.css          #   Tailwind entry + design tokens, light and dark (DESIGN.md)
 │   │   └── components.toml     #   which Topcoat UI components are installed
 │   ├── core/                   # klotho-core. Domain and data: no HTTP in here
 │   │   ├── src/
@@ -149,7 +153,10 @@ flowchart LR
 
 | Package | Version | Used for | Phase |
 |---|---|---|---|
-| `topcoat` | **=0.9.0** (pinned) | Pages, components, sessions, cookies, origin check, assets. Features: default + `tailwind`, `ui`, `font-fontsource`. Also a `[build-dependencies]` entry with `tailwind` | P2 (login page), P3 |
+| `topcoat` | **=0.9.0** (pinned) | Pages, components, sessions, cookies, origin check, assets, fonts, icons. Features: default + `tailwind`, `tower`, `ui`, `icon-iconify`. Also a `[build-dependencies]` entry with `tailwind` and `icon-iconify` ([ADR 0005](docs/decisions/0005-tailwind-and-design-system.md)) | P2 (login page), P3 |
+| Tailwind CLI | 4.3.2 | Standalone CLI, fetched by `build.rs` and checked against a SHA-256 per platform, or supplied with `TAILWIND_CLI` | P3 |
+| Atkinson Hyperlegible Next and Mono, Cormorant Garamond | Fontsource 5.3.0 | Variable WOFF2 files vendored in `crates/web/assets/fonts/` (OFL) and embedded | P3 |
+| Lucide icons | `@iconify-json/lucide` 1.2.138 | Vendored in `crates/web/icons/` (ISC), compiled in as inline SVG | P3 |
 | Mermaid | 12.0.0 | `mermaid.esm.min.mjs` from the npm tarball's `dist/`, vendored in `assets/` and declared with `asset!()`. Loaded only on diagram pages | P8 |
 | Passkey script | ours | About 50 lines around `navigator.credentials` with `PublicKeyCredential.parse*OptionsFromJSON()`. Replaces `@simplewebauthn/browser` | P5 |
 | CodeMirror | — | Only if P9 needs an editor; the diff and code views are server-rendered with `syntect`. P9 decides how to bundle it | P9 |
