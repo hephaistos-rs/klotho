@@ -113,9 +113,9 @@ All accept `?ref=` (default: the default branch). Collections are paginated with
 | GET | `/repos/{o}/{r}/commits/{sha}` | read | One commit with its diff stats | FR-UI-005 | P3 |
 | GET | `/repos/{o}/{r}/commits/{sha}/diff` | read | The full diff, paginated per file for large commits | FR-UI-005 | P3 |
 | GET | `/repos/{o}/{r}/compare/{base}...{head}` | read | Commits and diff between two refs (URL-encode any `/` in the refs) | FR-UI-008 | P6 |
-| GET | `/repos/{o}/{r}/contents/{*path}?ref=` | read | A directory listing, or file metadata plus content for small text files | FR-UI-001 | P3 |
+| GET | `/repos/{o}/{r}/contents` · `/contents/{*path}?ref=` | read | A directory listing, or file metadata plus content for small text files | FR-UI-001 | P3 |
 | GET | `/repos/{o}/{r}/raw/{*path}?ref=` | read | The file's bytes, streamed, as `application/octet-stream` with `nosniff` | NFR-PERF-013, NFR-SEC-010 | P3 |
-| GET | `/repos/{o}/{r}/readme?ref=` | read | The README rendered to sanitised HTML | FR-UI-002 | P3 |
+| GET | `/repos/{o}/{r}/readme?ref=&dir=` | read | The README of the root (or of `dir`) rendered to sanitised HTML, with relative links pointing at the repository's pages | FR-UI-002 | P3 |
 | GET | `/repos/{o}/{r}/blame/{*path}?ref=` | read | Blame | FR-UI-006 | P6 |
 | GET | `/repos/{o}/{r}/archive?ref=&format=zip\|tar.gz` | read | Download an archive (streamed) | FR-GIT-012 | P4 |
 | GET | `/repos/{o}/{r}/graph?ref=&cursor=` | read | Up to 50 commits with parents and ref labels, for the gitGraph | FR-UI-041/042 | P8 |
@@ -235,8 +235,8 @@ Rendered on the server by `klotho-web` (FR-UI-050), each with its own title and 
 | `/-/login`, `/-/register`, `/-/explore`, `/-/settings/…`, `/-/admin/…`, `/-/new` | Instance pages |
 | `/{owner}` | Profile or organisation page |
 | `/{owner}/{repo}` | Repository home (README) |
-| `/{owner}/{repo}/-/tree/{*spec}`, `/-/blob/{*spec}` | Tree and file (`spec` = ref + path, split by the resolver) |
-| `/{owner}/{repo}/-/commits/{*spec}`, `/-/commit/{sha}` | History and commit (with the thread view) |
+| `/{owner}/{repo}/-/tree/{*spec}`, `/-/blob/{*spec}`, `/-/raw/{*spec}` | Tree, file and raw download (`spec` = ref + path, split by the resolver). `raw` is the browser's download: it uses the session, where the API's `raw` uses a token |
+| `/{owner}/{repo}/-/commits/{*spec}`, `/-/commit/{sha}` | History and commit (with the thread view). `-/commits` alone redirects to the default branch |
 | `/{owner}/{repo}/-/branches`, `/-/tags`, `/-/compare/…`, `/-/settings/…` | Other repository pages |
 
 ## Migrating the existing endpoints
@@ -254,3 +254,5 @@ Rendered on the server by `klotho-web` (FR-UI-050), each with its own title and 
 **Status after Phase 1.** The API is at `/api/v1` and owner-scoped, and git transport is at `/{o}/{r}`. The three browsing endpoints moved as they were, keeping their old query parameters for now: `/api/v1/repos/{o}/{r}/commits?rev=&limit=`, `/tree?rev=&path=` and `/raw?rev=&path=` (`raw` already sends `nosniff`). Phase 3 replaces them with the shapes above.
 
 **Status during Phase 3.** `klotho-core` now has the read services behind the P3 rows. Until the endpoints above exist, the old ones call them: `/commits?rev=&path=&cursor=&limit=` returns the new commit shape (RFC 3339 dates with their offset) but no next cursor; `/tree?rev=&path=&cursor=&limit=` returns the `Contents` shape, a paged directory listing with `next` in the body, or a file, symlink or submodule; and `/raw?rev=&path=` streams, with `Content-Length` and `nosniff`. `contents/{*path}?ref=`, `raw/{*path}?ref=`, `readme`, `resolve`, `branches` and `tags` are still to come.
+
+**Status after the browse step (2026-10-03).** The interim `/tree` and `/raw?path=` are gone. `resolve`, `branches` (and `/branches/{*name}`), `tags` (and `/tags/{*name}`), `commits?ref=&path=&cursor=`, `contents` and `contents/{*path}`, `raw/{*path}` and `readme?ref=&dir=` exist as listed. `branches`, `tags` and `commits` return a JSON array with the next page in an RFC 8288 `Link` header; `contents` keeps `next` in its body. The README's HTML comes from comrak and then `ammonia` (NFR-SEC-011), and its relative links and images point at the web pages (`/-/blob/…`, `/-/raw/…`). The pages that use the same services are `/{owner}`, `/{owner}/{repo}`, `/-/tree`, `/-/blob`, `/-/raw`, `/-/commits`, `/-/branches` and `/-/tags`. Still to come in Phase 3: `commits/{sha}` and its diff, `/user/repos`, `/users/{username}`, search, `/version` and `openapi.json`.

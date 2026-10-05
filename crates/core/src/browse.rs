@@ -4,9 +4,13 @@
 
 use std::io::Read;
 
-use klotho_git::{BranchInfo, CommitInfo, Contents, FileInfo, Page, RefTarget, Resolved, TagInfo};
+pub use klotho_git::{
+    Annotation, BranchInfo, CommitInfo, Contents, DirListing, EntryType, FileInfo, GitTime, LinkInfo, Page,
+    RefKind, RefTarget, RepoInfo, Resolved, Signature, SubmoduleInfo, TagInfo, TreeEntry,
+};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::markdown::{self, LinkBase};
 use crate::{Core, Error, Repo, Result};
 
 /// How much of a raw file is read at a time, and how many reads may wait in
@@ -35,16 +39,50 @@ pub struct LogQuery {
     pub limit: Option<u32>,
 }
 
+/// A README, rendered by [`Core::readme_html`].
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Readme {
+    pub path: String,
+    pub name: String,
+    /// Sanitised HTML, safe to insert into a page.
+    pub html: String,
+    /// The commit it was read from.
+    #[serde(rename = "ref")]
+    pub target: RefTarget,
+}
+
+fn escape_html(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The chunks of a raw file, in order; an `Err` ends it early.
+pub type RawChunks = mpsc::Receiver<std::io::Result<Vec<u8>>>;
+
 /// A file being read for download.
 pub struct RawFile {
     /// The commit it was read from.
     pub target: RefTarget,
     pub size: u64,
     /// The content, in order. An `Err` ends it early.
-    pub chunks: mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    pub chunks: RawChunks,
 }
 
 impl Core {
+    /// The branch HEAD points at, and whether the repository has any commits.
+    pub async fn repo_info(&self, repo: &Repo) -> Result<RepoInfo> {
+        self.with_git(repo, RepoInfo::read).await
+    }
+
     /// The commit a `?ref=` (branch, tag or commit ID) names.
     pub async fn resolve_ref(&self, repo: &Repo, rev: Option<&str>) -> Result<RefTarget> {
         let rev = rev.map(str::to_owned);
@@ -106,6 +144,34 @@ impl Core {
     pub async fn readme(&self, repo: &Repo, rev: Option<&str>, dir: &str) -> Result<Option<FileInfo>> {
         let (rev, dir) = (rev.map(str::to_owned), dir.to_owned());
         self.with_git(repo, move |git| klotho_git::readme(git, rev.as_deref(), &dir)).await
+    }
+
+    /// The README in `dir` of `rev`, rendered for reading (FR-UI-002). Markdown
+    /// becomes sanitised HTML whose relative links and images point at the
+    /// repository's own pages; any other README is shown as preformatted text.
+    /// `None` when there is no README, or it's binary or too large to show.
+    pub async fn readme_html(&self, repo: &Repo, rev: Option<&str>, dir: &str) -> Result<Option<Readme>> {
+        let target = self.resolve_ref(repo, rev).await?;
+        let Some(file) = self.readme(repo, Some(&target.commit), dir).await? else {
+            return Ok(None);
+        };
+        let Some(text) = &file.text else {
+            return Ok(None);
+        };
+        let lower = file.name.to_ascii_lowercase();
+        let is_markdown = [".md", ".markdown", ".mdown", ".mkd"].iter().any(|ext| lower.ends_with(ext));
+        let html = if is_markdown {
+            let full_name = repo.full_name();
+            let base = LinkBase {
+                blob: self.urls.repo_page(&full_name, "blob", &target.name),
+                raw: self.urls.repo_page(&full_name, "raw", &target.name),
+                dir: dir.trim_matches('/').to_owned(),
+            };
+            markdown::render(text, Some(&base))
+        } else {
+            format!("<pre>{}</pre>", escape_html(text))
+        };
+        Ok(Some(Readme { path: file.path.clone(), name: file.name.clone(), html, target }))
     }
 
     /// The bytes of the file at `path` in `rev`, streamed (NFR-PERF-013). A

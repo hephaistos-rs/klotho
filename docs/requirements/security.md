@@ -70,7 +70,8 @@ Checked after Phase 2 (2026-10-02).
 | NFR-SEC-012 (CSP) | **Partial** (2026-10-03, [ADR 0005](../decisions/0005-tailwind-and-design-system.md)). Every UI response sends `Content-Security-Policy: frame-ancestors 'self'` and `X-Frame-Options: SAMEORIGIN`, plus `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. Pages have no inline scripts today, but the policy doesn't forbid them yet: `topcoat dev` injects its reload script and Lucide icons carry an inline `style`, so `script-src` and `style-src` need checking against Topcoat before they're added. | [lib.rs](../../crates/web/src/lib.rs) (`security_headers`) |
 
 Met today:
-- NFR-SEC-010: raw file contents are `application/octet-stream` with `X-Content-Type-Options: nosniff`.
+- NFR-SEC-010: raw file contents are `application/octet-stream` with `X-Content-Type-Options: nosniff`, from the API and from the browser's `/{owner}/{repo}/-/raw/…`, which also sends `Content-Security-Policy: sandbox; default-src 'none'`.
+- NFR-SEC-011 (2026-10-03): READMEs and `.md` files go through comrak (raw HTML dropped) and then `ammonia`'s allowlist, links get `rel="noopener noreferrer nofollow"` ([markdown.rs](../../crates/core/src/markdown.rs)). Tests check that `<script>`, `javascript:` links and event attributes don't survive.
 - NFR-SEC-013: only web pages accept the session cookie, it's `SameSite=Lax`, and Topcoat's origin check rejects cross-site and same-site (other subdomain) state-changing requests with `403`. `a_cross_site_form_post_with_the_session_cookie_is_refused` keeps a Topcoat upgrade from turning that off. The API ignores cookies entirely.
 - NFR-SEC-030: 500 responses say only "internal server error" and the details are logged ([error.rs](../../crates/server/src/error.rs)).
 

@@ -10,6 +10,7 @@ mod auth;
 pub mod browse;
 pub mod config;
 mod error;
+pub mod markdown;
 mod meta;
 pub mod names;
 mod owners;
@@ -19,12 +20,12 @@ mod urls;
 
 pub use access::{Action, Actor, Scope, Scopes};
 pub use auth::{INVITE_LIFETIME, NewToken, NewUser, TokenInfo, User};
-pub use browse::{LogQuery, RawFile};
+pub use browse::{LogQuery, RawFile, Readme};
 pub use error::{Error, Result};
 use klotho_git::RepoStore;
 pub use owners::{Owner, OwnerKind};
 pub use repos::{Repo, StorageReport};
-pub use urls::Urls;
+pub use urls::{Urls, encode_path};
 
 use std::sync::Arc;
 

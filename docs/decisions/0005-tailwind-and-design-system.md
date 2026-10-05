@@ -87,7 +87,7 @@ Only the components and variants a page uses are kept, because unused code fails
 
 ### Every asset is in the binary, and the release build proves it
 
-The two-pass build of ADR 0002 already embeds anything declared with `asset!()`, so the stylesheet and the fonts needed no change in `crates/server/src/assets.rs`. `cargo xtask dist` now checks more: it starts the lone binary, fetches the home page, and requires every stylesheet and preload it links, and every `url()` inside those stylesheets, to return 200 with `immutable` caching. The page may not reference another host. The last run served 3 stylesheets and the 5 files they load.
+The two-pass build of ADR 0002 already embeds anything declared with `asset!()`, so the stylesheet and the fonts needed no change in `crates/server/src/assets.rs`. `cargo xtask dist` now checks more: it starts the lone binary, fetches the home page, and requires every stylesheet and preload it links, and every `url()` inside those stylesheets, to return 200 with `immutable` caching. The page may not reference another host. The last run served 4 stylesheets and the 7 files they load.
 
 ### Theme preference: a UI-only exception to API parity
 

@@ -223,6 +223,78 @@
   }
 }
 
+/* Rendered Markdown (READMEs and `.md` files): the HTML comes from comrak and
+   ammonia with no classes, so its look lives here. Sans throughout; the
+   display serif stays reserved for page titles. */
+@layer components {
+  .markdown {
+    @apply text-base leading-relaxed wrap-anywhere;
+  }
+  .markdown > :first-child {
+    margin-top: 0;
+  }
+  .markdown :where(p, ul, ol, pre, table, blockquote, hr) {
+    @apply mt-4;
+  }
+  .markdown :where(h1, h2, h3, h4, h5, h6) {
+    @apply mt-8 mb-3 font-semibold leading-snug;
+  }
+  .markdown h1 {
+    @apply border-b border-border pb-2 text-2xl;
+  }
+  .markdown h2 {
+    @apply border-b border-border pb-1.5 text-xl;
+  }
+  .markdown h3 {
+    @apply text-lg;
+  }
+  .markdown :where(h4, h5, h6) {
+    @apply text-base;
+  }
+  .markdown :where(ul) {
+    @apply list-disc pl-6;
+  }
+  .markdown :where(ol) {
+    @apply list-decimal pl-6;
+  }
+  .markdown li:has(> input[type="checkbox"]) {
+    @apply -ml-5 list-none;
+  }
+  .markdown li + li {
+    @apply mt-1;
+  }
+  .markdown li > input[type="checkbox"] {
+    @apply mr-2 align-middle;
+  }
+  .markdown :where(code) {
+    @apply rounded-sm bg-muted px-1 py-0.5 font-mono text-meta;
+  }
+  .markdown pre {
+    @apply rounded-md border border-border bg-muted px-3 py-2 text-meta;
+  }
+  .markdown pre code {
+    @apply bg-transparent p-0;
+  }
+  .markdown blockquote {
+    @apply border-l border-border pl-4 text-muted-foreground;
+  }
+  .markdown table {
+    @apply block max-w-full overflow-x-auto border-collapse text-sm;
+  }
+  .markdown :where(th, td) {
+    @apply border border-border px-3 py-1.5 text-left;
+  }
+  .markdown th {
+    @apply bg-muted font-semibold;
+  }
+  .markdown img {
+    @apply inline max-w-full;
+  }
+  .markdown hr {
+    @apply border-border;
+  }
+}
+
 @layer base {
   :root {
     /* Native checkboxes, radios and range inputs take the action colour. */

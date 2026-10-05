@@ -25,9 +25,11 @@ klotho-server = { path = "crates/server" }
 klotho-ssh = { path = "crates/ssh" }
 klotho-web = { path = "crates/web" }
 anyhow = "1.0.104"
+ammonia = "4.2.0"
 argon2 = "0.6.0"
 getrandom = "0.4.3"
 rpassword = "7.5.4"
+comrak = { version = "0.55.0", default-features = false }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 figment = { version = "0.10.19", features = ["toml", "env"] }
 mime_guess = "2.0.5"
@@ -38,6 +40,8 @@ tower = "0.5"
 tower-http = "0.7.1"
 async-compression = "0.4.49"
 axum = "0.8.9"
+bytes = "1.12.1"
+http-body = "1.1.0"
 futures-util = "0.3.34"
 gix = "0.87"
 # Must be the exact gix-pack that gix uses, so Cargo merges our features into

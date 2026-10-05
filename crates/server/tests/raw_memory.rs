@@ -98,8 +98,7 @@ async fn a_1_gib_raw_download_does_not_grow_server_memory() {
     PEAK.store(baseline, Ordering::Relaxed);
 
     let mut conn = tokio::net::TcpStream::connect(running.addr).await.unwrap();
-    let request =
-        "GET /api/v1/repos/alice/demo/raw?path=big.txt HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+    let request = "GET /api/v1/repos/alice/demo/raw/big.txt HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
     conn.write_all(request.as_bytes()).await.unwrap();
     let mut response = BufReader::with_capacity(64 * 1024, conn);
     let mut headers = String::new();

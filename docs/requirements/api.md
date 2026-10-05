@@ -49,6 +49,6 @@ Checked 2026-10-02, during Phase 3.
 
 | Requirement | Current behaviour | Where |
 |---|---|---|
-| FR-API-020, FR-API-021 (pagination) | **Partial.** `GET /users/{username}/repos` is paged with a `Link` header. `klotho-core` pages branches, tags, directory listings and the commit log with cursors (max 100), but `GET …/commits` and `GET …/tree` return no `Link` header yet (`tree` returns `next` in its body; `commits` drops it). The next Phase 3 step replaces these endpoints. | [api.rs](../../crates/server/src/api.rs) |
+| FR-API-020, FR-API-021 (pagination) | **Met for every list so far** (2026-10-03, browse step). `GET /users/{username}/repos`, `…/branches`, `…/tags` and `…/commits` are paged with cursors (max 100) and an RFC 8288 `Link` header. A directory listing (`…/contents`) carries its `next` cursor in the body, because the body is an object, not a list. | [api.rs](../../crates/server/src/api.rs) (`next_link`) |
 
 Met today: FR-API-001 (`/api/v1`, with JSON 404s for anything else under `/api`), FR-API-003 (`/api/v1/repos/{owner}/{repo}`), FR-API-010 (repository resource with ID, owner, display name, URLs built from `server.public_url`), FR-API-011 (RFC 3339 times; commit author and committer dates keep their original UTC offset), FR-API-012 (full object IDs) and FR-API-030 (`{"code", "message"}` errors). Internal error details are hidden from clients; that requirement lives in [security.md](security.md) as NFR-SEC-030.

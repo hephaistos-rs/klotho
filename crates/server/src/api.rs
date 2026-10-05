@@ -6,9 +6,13 @@
 //! |---------------|--------------------------------------|-------------------------------|
 //! | GET           | `/instance`                          | nothing                       |
 //! | GET, PATCH    | `/repos/{owner}/{repo}`              | read; admin + `repo:admin`    |
-//! | GET           | `/repos/{owner}/{repo}/commits`      | read (`rev`, `limit`)         |
-//! | GET           | `/repos/{owner}/{repo}/tree`         | read (`rev`, `path`)          |
-//! | GET           | `/repos/{owner}/{repo}/raw`          | read (`rev`, `path`)          |
+//! | GET           | `/repos/{owner}/{repo}/resolve`      | read (`spec`)                 |
+//! | GET           | `/repos/{owner}/{repo}/branches[/{*name}]` | read; `Link`            |
+//! | GET           | `/repos/{owner}/{repo}/tags[/{*name}]` | read; `Link`                |
+//! | GET           | `/repos/{owner}/{repo}/commits`      | read (`ref`, `path`); `Link`  |
+//! | GET           | `/repos/{owner}/{repo}/contents[/{*path}]` | read (`ref`)            |
+//! | GET           | `/repos/{owner}/{repo}/raw/{*path}`  | read (`ref`)                  |
+//! | GET           | `/repos/{owner}/{repo}/readme`       | read (`ref`, `dir`)           |
 //! | GET           | `/users/{username}/repos`            | what you can see; `Link`      |
 //! | GET           | `/user`                              | `user:read`                   |
 //! | POST          | `/user/repos`                        | `repo:admin`                  |
@@ -27,10 +31,12 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use klotho_core::browse::{BranchInfo, Contents, Resolved, TagInfo};
 use klotho_core::browse::{DEFAULT_PAGE, MAX_PAGE};
 use klotho_core::config::Registration;
-use klotho_core::{Action, Core, LogQuery, NewUser, Owner, Repo, Scope, StorageReport, TokenInfo};
-use klotho_git::{CommitInfo, Contents, RepoInfo};
+use klotho_core::{
+    Action, Core, LogQuery, NewUser, Owner, Readme, Repo, Scope, StorageReport, TokenInfo, encode_path,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
@@ -43,9 +49,16 @@ pub fn router() -> Router<AppState> {
     let v1 = Router::new()
         .route("/instance", get(instance))
         .route("/repos/{owner}/{repo}", get(repo).patch(update_repo))
+        .route("/repos/{owner}/{repo}/resolve", get(resolve))
+        .route("/repos/{owner}/{repo}/branches", get(branches))
+        .route("/repos/{owner}/{repo}/branches/{*name}", get(branch))
+        .route("/repos/{owner}/{repo}/tags", get(tags))
+        .route("/repos/{owner}/{repo}/tags/{*name}", get(tag))
         .route("/repos/{owner}/{repo}/commits", get(commits))
-        .route("/repos/{owner}/{repo}/tree", get(tree))
-        .route("/repos/{owner}/{repo}/raw", get(raw))
+        .route("/repos/{owner}/{repo}/contents", get(root_contents))
+        .route("/repos/{owner}/{repo}/contents/{*path}", get(contents))
+        .route("/repos/{owner}/{repo}/raw/{*path}", get(raw))
+        .route("/repos/{owner}/{repo}/readme", get(readme))
         .route("/users/{username}/repos", get(user_repos))
         .route("/user", get(current_user))
         .route("/user/repos", post(create_own_repo))
@@ -88,7 +101,7 @@ struct RepoResource {
 
 impl RepoResource {
     async fn build(core: &Core, repo: Repo) -> Result<Self, ApiError> {
-        let info = core.with_git(&repo, RepoInfo::read).await?;
+        let info = core.repo_info(&repo).await?;
         let full_name = repo.full_name();
         let urls = core.urls();
         Ok(Self {
@@ -107,14 +120,124 @@ impl RepoResource {
     }
 }
 
+/// The query of the read endpoints. Each uses the fields it needs.
 #[derive(Deserialize)]
-struct RevQuery {
+struct RefQuery {
     /// A branch, tag or commit ID; the default branch if missing.
+    #[serde(rename = "ref")]
     rev: Option<String>,
+    /// For `/commits`: only commits that changed this path.
     #[serde(default)]
     path: String,
+    /// For `/readme`: the directory to look in, the root if empty.
+    #[serde(default)]
+    dir: String,
     limit: Option<u32>,
+    /// From the previous page's `Link: <…>; rel="next"`.
     cursor: Option<String>,
+}
+
+/// An RFC 8288 `Link` header to the next page, when there is one
+/// (FR-API-020, 021). `path` is under `/api/v1`, `params` the query without
+/// the cursor.
+fn next_link(core: &Core, path: &str, params: &[(&str, Option<&str>)], next: Option<&str>) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    let Some(next) = next else {
+        return headers;
+    };
+    let mut query = String::new();
+    for (name, value) in params.iter().copied().chain([("cursor", Some(next))]) {
+        if let Some(value) = value {
+            query.push(if query.is_empty() { '?' } else { '&' });
+            query.push_str(&format!("{name}={}", encode_query(value)));
+        }
+    }
+    let url = core.urls().api(&format!("{}{query}", encode_path(path)));
+    if let Ok(link) = HeaderValue::from_str(&format!("<{url}>; rel=\"next\"")) {
+        headers.insert(header::LINK, link);
+    }
+    headers
+}
+
+/// [`encode_path`], with `/` and `+` encoded too: a query decoder reads a
+/// bare `+` as a space.
+fn encode_query(value: &str) -> String {
+    encode_path(value).replace('/', "%2F").replace('+', "%2B")
+}
+
+async fn resolve(
+    State(core): State<Core>,
+    headers: HeaderMap,
+    Path((owner, name)): Path<(String, String)>,
+    Query(query): Query<SpecQuery>,
+) -> Result<Json<Resolved>, ApiError> {
+    let actor = api_actor(&core, &headers).await?;
+    let repo = core.repo_for(&actor, &owner, &name, Action::Read).await?;
+    Ok(Json(core.resolve_spec(&repo, &query.spec).await?))
+}
+
+#[derive(Deserialize)]
+struct SpecQuery {
+    /// `ref/path` as in a web URL, e.g. `feature/x/src/lib.rs`.
+    spec: String,
+}
+
+async fn branches(
+    State(core): State<Core>,
+    headers: HeaderMap,
+    Path((owner, name)): Path<(String, String)>,
+    Query(query): Query<RefQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let actor = api_actor(&core, &headers).await?;
+    let repo = core.repo_for(&actor, &owner, &name, Action::Read).await?;
+    let page = core.branches(&repo, query.cursor.as_deref(), query.limit).await?;
+    let limit = query.limit.map(|limit| limit.to_string());
+    let link = next_link(
+        &core,
+        &format!("/repos/{}/branches", repo.full_name()),
+        &[("limit", limit.as_deref())],
+        page.next.as_deref(),
+    );
+    Ok((link, Json(page.items)))
+}
+
+async fn branch(
+    State(core): State<Core>,
+    headers: HeaderMap,
+    Path((owner, name, branch)): Path<(String, String, String)>,
+) -> Result<Json<BranchInfo>, ApiError> {
+    let actor = api_actor(&core, &headers).await?;
+    let repo = core.repo_for(&actor, &owner, &name, Action::Read).await?;
+    Ok(Json(core.branch(&repo, &branch).await?))
+}
+
+async fn tags(
+    State(core): State<Core>,
+    headers: HeaderMap,
+    Path((owner, name)): Path<(String, String)>,
+    Query(query): Query<RefQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let actor = api_actor(&core, &headers).await?;
+    let repo = core.repo_for(&actor, &owner, &name, Action::Read).await?;
+    let page = core.tags(&repo, query.cursor.as_deref(), query.limit).await?;
+    let limit = query.limit.map(|limit| limit.to_string());
+    let link = next_link(
+        &core,
+        &format!("/repos/{}/tags", repo.full_name()),
+        &[("limit", limit.as_deref())],
+        page.next.as_deref(),
+    );
+    Ok((link, Json(page.items)))
+}
+
+async fn tag(
+    State(core): State<Core>,
+    headers: HeaderMap,
+    Path((owner, name, tag)): Path<(String, String, String)>,
+) -> Result<Json<TagInfo>, ApiError> {
+    let actor = api_actor(&core, &headers).await?;
+    let repo = core.repo_for(&actor, &owner, &name, Action::Read).await?;
+    Ok(Json(core.tag(&repo, &tag).await?))
 }
 
 async fn repo(
@@ -147,39 +270,82 @@ async fn update_repo(
     Ok(Json(RepoResource::build(&core, repo).await?))
 }
 
+/// The commit log, newest first. The next page's cursor is in the `Link`
+/// header; it keeps the page stable while the branch moves (NFR-PERF-014).
 async fn commits(
     State(core): State<Core>,
     headers: HeaderMap,
     Path((owner, name)): Path<(String, String)>,
-    Query(query): Query<RevQuery>,
-) -> Result<Json<Vec<CommitInfo>>, ApiError> {
+    Query(query): Query<RefQuery>,
+) -> Result<impl IntoResponse, ApiError> {
     let actor = api_actor(&core, &headers).await?;
     let repo = core.repo_for(&actor, &owner, &name, Action::Read).await?;
-    let log = LogQuery { rev: query.rev, path: query.path, cursor: query.cursor, limit: query.limit };
-    Ok(Json(core.commits(&repo, log).await?.items))
+    let log = LogQuery {
+        rev: query.rev.clone(),
+        path: query.path.clone(),
+        cursor: query.cursor,
+        limit: query.limit,
+    };
+    let page = core.commits(&repo, log).await?;
+    let limit = query.limit.map(|limit| limit.to_string());
+    let path = (!query.path.is_empty()).then_some(query.path.as_str());
+    let link = next_link(
+        &core,
+        &format!("/repos/{}/commits", repo.full_name()),
+        &[("ref", query.rev.as_deref()), ("path", path), ("limit", limit.as_deref())],
+        page.next.as_deref(),
+    );
+    Ok((link, Json(page.items)))
 }
 
-async fn tree(
-    State(core): State<Core>,
+async fn root_contents(
+    state: State<Core>,
     headers: HeaderMap,
     Path((owner, name)): Path<(String, String)>,
-    Query(query): Query<RevQuery>,
+    query: Query<RefQuery>,
+) -> Result<Json<Contents>, ApiError> {
+    contents(state, headers, Path((owner, name, String::new())), query).await
+}
+
+/// A directory listing (paged, `next` in the body), or a file with its text if
+/// it is small and not binary, a symlink or a submodule (FR-UI-001).
+async fn contents(
+    State(core): State<Core>,
+    headers: HeaderMap,
+    Path((owner, name, path)): Path<(String, String, String)>,
+    Query(query): Query<RefQuery>,
 ) -> Result<Json<Contents>, ApiError> {
     let actor = api_actor(&core, &headers).await?;
     let repo = core.repo_for(&actor, &owner, &name, Action::Read).await?;
     let (rev, cursor) = (query.rev.as_deref(), query.cursor.as_deref());
-    Ok(Json(core.contents(&repo, rev, &query.path, cursor, query.limit).await?))
+    Ok(Json(core.contents(&repo, rev, &path, cursor, query.limit).await?))
+}
+
+/// The README rendered to sanitised HTML (FR-UI-002, NFR-SEC-011), or `404
+/// readme_not_found`.
+async fn readme(
+    State(core): State<Core>,
+    headers: HeaderMap,
+    Path((owner, name)): Path<(String, String)>,
+    Query(query): Query<RefQuery>,
+) -> Result<Json<Readme>, ApiError> {
+    let actor = api_actor(&core, &headers).await?;
+    let repo = core.repo_for(&actor, &owner, &name, Action::Read).await?;
+    match core.readme_html(&repo, query.rev.as_deref(), &query.dir).await? {
+        Some(readme) => Ok(Json(readme)),
+        None => Err(ApiError::new(StatusCode::NOT_FOUND, "readme_not_found", "no README here")),
+    }
 }
 
 async fn raw(
     State(core): State<Core>,
     headers: HeaderMap,
-    Path((owner, name)): Path<(String, String)>,
-    Query(query): Query<RevQuery>,
+    Path((owner, name, path)): Path<(String, String, String)>,
+    Query(query): Query<RefQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let actor = api_actor(&core, &headers).await?;
     let repo = core.repo_for(&actor, &owner, &name, Action::Read).await?;
-    let file = core.raw(&repo, query.rev.as_deref(), &query.path).await?;
+    let file = core.raw(&repo, query.rev.as_deref(), &path).await?;
     let chunks = futures_util::stream::unfold(file.chunks, |mut chunks| async move {
         chunks.recv().await.map(|chunk| (chunk, chunks))
     });

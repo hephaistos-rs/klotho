@@ -79,3 +79,12 @@ Checked again 2026-10-03, after the design-system run ([ADR 0005](../decisions/0
 - **NFR-UI-001 is what the components and pages were reviewed against.** Contrast was measured for every token pair, focus is visible (including in forced-colors mode), labels and errors are tied to their fields, and every page has landmarks and a skip link. No automated checker runs yet. One known gap: on the register form, email and password errors show above the form rather than on their field, until `klotho-core` reports which field failed.
 - **NFR-UI-002 and NFR-UI-003.** Every page, menu and confirmation works without JavaScript. Pages were checked at 390 px and 1280 px, with no sideways scrolling.
 - **FR-UI-052.** The stylesheet, both font families and their `@font-face` CSS are served from the binary at hashed, `immutable` URLs, and `cargo xtask dist` checks this. Icons are inline SVG.
+
+Checked again 2026-10-03, after the browse step (repository, folder, file, raw, commits, branches, tags and owner pages):
+- **Met:** FR-UI-001 (folders and files at any branch, tag or commit), FR-UI-002 (the README, comrak with GFM tables, task lists, autolinks and strikethrough, sanitised by `ammonia`), FR-UI-007 (branches and tags with their latest commit and date).
+- **FR-UI-003, partly.** Files have line numbers, and binary or over-1 MiB files offer a download instead. No syntax highlighting yet (`syntect` is still to come).
+- **FR-UI-004, not yet.** Images show the binary-file download rather than a preview. Raw files are served as `application/octet-stream` with `nosniff` and a `sandbox` CSP, so an SVG can't run on this origin either way.
+- **FR-UI-005, partly.** The log for a branch, tag or path is there, a page at a time. A single commit with its diff isn't yet; commit links go to the tree at that commit.
+- **FR-UI-009, partly.** Every line can be linked (`#L12`). No line ranges or permalink switch yet.
+- **FR-UI-010, partly.** The HTTPS clone URL is shown in a focusable block, ready to select. No SSH URL (Phase 4) and no copy button, which would need JavaScript.
+- **FR-UI-023, partly.** `/{owner}` lists the repositories the reader can see, and the home page lists the signed-in user's own. No activity yet.

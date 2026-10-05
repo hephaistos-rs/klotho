@@ -51,10 +51,33 @@ impl Urls {
         format!("{}/api/v1{path_and_query}", self.base)
     }
 
+    /// A page under a repository, e.g. `repo_page("alice/demo", "blob", "main/src/lib.rs")`
+    /// gives `https://host/alice/demo/-/blob/main/src/lib.rs`, each segment
+    /// percent-encoded.
+    pub fn repo_page(&self, full_name: &str, kind: &str, rest: &str) -> String {
+        format!("{}/{full_name}/-/{kind}/{}", self.base, encode_path(rest))
+    }
+
     /// The SSH clone URL. SSH itself arrives in Phase 4.
     pub fn ssh(&self, full_name: &str) -> String {
         format!("git@{}:{full_name}.git", self.host)
     }
+}
+
+/// Percent-encodes each `/`-separated segment of a path, keeping the slashes,
+/// so a ref or file name with spaces, `#` or `?` stays one path.
+pub fn encode_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric()
+            || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'/' | b'@' | b'+' | b'!')
+        {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }
 
 #[cfg(test)]

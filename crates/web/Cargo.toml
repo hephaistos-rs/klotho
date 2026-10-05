@@ -8,6 +8,9 @@ publish.workspace = true
 
 [dependencies]
 klotho-core.workspace = true
+# For streaming a raw file through a Topcoat route.
+bytes.workspace = true
+http-body.workspace = true
 jiff.workspace = true
 serde.workspace = true
 # `default` is Topcoat's router, sessions, cookies, assets, fonts, icons and

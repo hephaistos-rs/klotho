@@ -6,9 +6,13 @@
 //! `klotho-core`'s [`Core`], registered as app context.
 
 mod account;
+mod code;
 /// Topcoat UI components, copied in with `topcoat ui add` and ours to edit.
 /// Only the ones a page uses are kept; `topcoat ui add` brings one back.
 mod components;
+mod history;
+mod owner;
+mod repo;
 mod session;
 mod theme;
 mod tokens;
@@ -17,7 +21,7 @@ mod ui;
 use std::io;
 use std::net::SocketAddr;
 
-use klotho_core::Core;
+use klotho_core::{Actor, Core};
 use topcoat::Result;
 use topcoat::asset::{AssetBundle, AssetConfig, Manifest, RouterBuilderAssetExt};
 use topcoat::context::{Cx, try_app_context};
@@ -35,9 +39,10 @@ use topcoat::session::{RouterBuilderSessionExt, SessionConfig};
 use topcoat::tailwind;
 use topcoat::view::{View, component, error_boundary, view};
 
-use crate::session::{SessionCookie, current_user};
+use crate::owner::repo_list;
+use crate::session::{SessionCookie, core, current_user};
 use crate::theme::current_theme;
-use crate::ui::{empty_state, page_header, shell};
+use crate::ui::{empty_state, page_header, section_heading, shell};
 
 /// The web UI as a tower service, as [`service`] returns it.
 pub type WebService = TowerService;
@@ -102,7 +107,17 @@ pub fn service(assets: Assets, core: Core) -> io::Result<TowerService> {
         .page(tokens::create_token)
         .route(tokens::revoke_token)
         .route(theme::set_theme)
+        .page(owner::owner_page)
+        .page(code::repo_home)
+        .page(code::tree)
+        .page(code::blob)
+        .route(code::raw)
+        .route(history::commits_default)
+        .page(history::commits)
+        .page(history::branches)
+        .page(history::tags)
         .page(not_found_page)
+        .page(not_found_in_repo)
         .font(theme::SANS)
         .font(theme::MONO)
         .font(theme::DISPLAY)
@@ -172,38 +187,107 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<impl View> {
 }
 
 /// The `<title>` for a path: the page's name, then "Klotho" (WCAG 2.4.2).
-fn document_title(path: &str) -> &'static str {
-    match path {
-        "/-/login" => "Sign in · Klotho",
-        "/-/register" => "Create an account · Klotho",
-        "/-/settings/tokens" => "Access tokens · Klotho",
-        _ => "Klotho",
-    }
+/// Repository and owner pages are named after the path they show, which
+/// says no more than the address itself.
+fn document_title(path: &str) -> String {
+    let named = match path {
+        "/" => None,
+        "/-/login" => Some("Sign in".to_owned()),
+        "/-/register" => Some("Create an account".to_owned()),
+        "/-/settings/tokens" => Some("Access tokens".to_owned()),
+        path if path.starts_with("/-/") || path.starts_with("/_") => None,
+        path => {
+            let mut segments = path.split('/').filter(|s| !s.is_empty());
+            match (segments.next(), segments.next()) {
+                (Some(owner), Some(repo)) => Some(format!("{}/{}", decode(owner), decode(repo))),
+                (Some(owner), None) => Some(decode(owner)),
+                _ => None,
+            }
+        }
+    };
+    named.map_or_else(|| "Klotho".to_owned(), |name| format!("{name} · Klotho"))
 }
+
+/// Undoes percent-encoding in a path segment, for display.
+fn decode(segment: &str) -> String {
+    let bytes = segment.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        if bytes[i] == b'%'
+            && let (Some(hi), Some(lo)) =
+                (bytes.get(i + 1).and_then(|&b| hex(b)), bytes.get(i + 2).and_then(|&b| hex(b)))
+        {
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Repositories on the home page; the rest are on the owner page.
+const HOME_REPOS: u32 = 50;
 
 #[page("/")]
 async fn home(cx: &Cx) -> Result<impl View> {
-    let signed_in = current_user(cx).await.is_some();
+    let user = current_user(cx).await.cloned();
+    let mut all = None;
+    let repos = match &user {
+        Some(user) => {
+            let actor = Actor::Session(user.clone());
+            // One more than is shown, to know whether to link to the rest.
+            let mut repos = core(cx).list_repos(&actor, &user.username, None, HOME_REPOS + 1).await?;
+            if repos.len() > HOME_REPOS as usize {
+                repos.truncate(HOME_REPOS as usize);
+                all = Some(format!("/{}", klotho_core::encode_path(&user.username)));
+            }
+            Some(repos)
+        }
+        None => None,
+    };
     Ok(view! {
         page_header(title: "Klotho", description: "A self-hosted git forge.")
-        empty_state(
-            title: "Repositories aren't shown here yet.",
-            if signed_in {
-                "Clone and push with git, using an "
-                <a href="/-/settings/tokens">"access token"</a>
-                " as the password."
-            } else {
-                <a href="/-/login">"Sign in"</a>
-                " to create an access token for pushing, or for cloning private repositories."
+        match repos {
+            Some(repos) => {
+                section_heading(title: "Your repositories", id: "your-repositories")
+                repo_list(repos: repos, empty: "You have no repositories yet.")
+                if let Some(all) = all {
+                    <p class="mt-4"><a href=(all)>"All your repositories"</a></p>
+                }
+                <p class="mt-4 text-sm text-muted-foreground">
+                    "Clone and push with git, using an "
+                    <a href="/-/settings/tokens">"access token"</a>
+                    " as the password."
+                </p>
             }
-        )
+            None => {
+                empty_state(
+                    title: "Sign in to see your repositories.",
+                    <a href="/-/login">"Sign in"</a>
+                    " to create an access token for pushing, or for cloning private repositories."
+                )
+            }
+        }
     })
 }
 
 /// Every path no page claims gets the shell and a way home, with a 404
 /// status. The layout renders the same page for a page's `not_found()`.
-#[page("/{*path}")]
+///
+/// There is no root `/{*path}`: the router can't hold one beside the owner
+/// page `/{owner}`. One- and two-segment paths are owner and repository pages
+/// (which 404 themselves), so these two cover everything else.
+#[page("/-/{*rest}")]
 async fn not_found_page() -> Result<impl View> {
+    Ok(view! { not_found() })
+}
+
+#[page("/{owner_name}/{repo_name}/{*rest}")]
+async fn not_found_in_repo() -> Result<impl View> {
     Ok(view! { not_found() })
 }
 
@@ -222,12 +306,13 @@ async fn not_found() -> Result<impl View> {
 /// Headers for every UI response: pages can't be framed by other sites
 /// (clickjacking the one-click forms, NFR-SEC-012), content types aren't
 /// sniffed, and full URLs don't leak to other sites. A page can set its own
-/// `Referrer-Policy` (the magic-link pages need `no-referrer`).
+/// `Referrer-Policy` (the magic-link pages need `no-referrer`) and its own
+/// `Content-Security-Policy` (raw files are sandboxed).
 #[layer("/")]
 async fn security_headers(cx: &Cx, body: Body, next: Next<'_>) -> Result<Response> {
     let mut response = next.run(cx, body).await?;
     let headers = response.headers_mut();
-    headers.insert(CONTENT_SECURITY_POLICY, HeaderValue::from_static("frame-ancestors 'self'"));
+    headers.entry(CONTENT_SECURITY_POLICY).or_insert(HeaderValue::from_static("frame-ancestors 'self'"));
     headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("SAMEORIGIN"));
     headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.entry(REFERRER_POLICY).or_insert(HeaderValue::from_static("same-origin"));

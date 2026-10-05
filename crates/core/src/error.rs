@@ -50,3 +50,22 @@ pub enum Error {
     #[error("background task failed: {0}")]
     Join(#[from] tokio::task::JoinError),
 }
+
+impl Error {
+    /// Whether this means "nothing here": no such owner, repository (or one the
+    /// caller can't see), revision or path. Pages answer these with their 404.
+    pub fn is_not_found(&self) -> bool {
+        matches!(
+            self,
+            Self::OwnerNotFound(_)
+                | Self::RepoNotFound(_)
+                | Self::Git(klotho_git::Error::RevisionNotFound(_) | klotho_git::Error::PathNotFound(_))
+        )
+    }
+
+    /// Whether this is a paging cursor that wasn't one of ours, e.g. edited by
+    /// hand. Pages and the API answer it with a 400.
+    pub fn is_invalid_cursor(&self) -> bool {
+        matches!(self, Self::Git(klotho_git::Error::InvalidCursor(_)))
+    }
+}

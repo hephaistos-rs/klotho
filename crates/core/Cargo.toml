@@ -7,6 +7,8 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+ammonia.workspace = true
+comrak.workspace = true
 serde.workspace = true
 gix.workspace = true
 argon2.workspace = true

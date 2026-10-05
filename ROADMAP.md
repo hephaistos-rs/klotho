@@ -42,7 +42,11 @@ klotho/
 │   ├── web/                    # klotho-web. The web UI: Topcoat pages and components, rendered on the server
 │   │   ├── src/
 │   │   │   ├── lib.rs          #   router(state) -> topcoat Router (app context, sessions, assets)
-│   │   │   ├── app/            #   pages; the module tree is the URL tree (Topcoat module routing)
+│   │   │   ├── account.rs, tokens.rs  # sign-in, registration, access tokens
+│   │   │   ├── repo.rs         #   what repository pages share: loading through repo_for, header, URLs
+│   │   │   ├── code.rs         #   repository home, /-/tree, /-/blob, /-/raw
+│   │   │   ├── history.rs      #   /-/commits, /-/branches, /-/tags
+│   │   │   ├── owner.rs        #   /{owner}
 │   │   │   ├── components/     #   Topcoat UI components (copied in, ours to edit) + our own
 │   │   │   ├── ui.rs           #   the shell (header, footer, theme switch) and shared page helpers
 │   │   │   ├── theme.rs        #   fonts (font!/asset!), the light/dark/system cookie, POST /-/theme
@@ -56,6 +60,8 @@ klotho/
 │   │   │   ├── names.rs        #   RepoName / OwnerName: display + key (today's git/src/name.rs)
 │   │   │   ├── authz.rs        #   authorize(actor, resource, action), the one permission check (FR-ACL-050)
 │   │   │   ├── repos.rs        #   create / rename / delete services (DB + storage together)
+│   │   │   ├── browse.rs       #   reads: refs, history, contents, raw, README (pages and API alike)
+│   │   │   ├── markdown.rs     #   comrak → ammonia, with links into the repository (NFR-SEC-011)
 │   │   │   ├── users.rs, auth/ #   passwords, tokens, passkeys, TOTP, OIDC logic
 │   │   │   ├── files.rs        #   FileStore: local or S3 via object_store (ADR 0003)
 │   │   │   └── db/             #   sqlx queries
@@ -126,8 +132,9 @@ flowchart LR
 | `utoipa`, `utoipa-axum` | 6.0.0, 0.3.0 | OpenAPI generated from handlers (FR-API-005), for external clients | P3 |
 | `rust-embed` | 8.12.0 | Embedding the Topcoat asset bundle in the binary, when `KLOTHO_ASSETS_DIR` is set at build time | P0 |
 | `mime_guess` | 2.0.5 | Content types for embedded assets | P0 |
-| `comrak` | 0.55.0 | Markdown (GFM) → HTML | P3 |
-| `ammonia` | 4.2.0 | HTML sanitising after comrak (NFR-SEC-011) | P3 |
+| `comrak` | 0.55.0 (have) | Markdown (GFM) → HTML, with `default-features = false` | P3 |
+| `ammonia` | 4.2.0 (have) | HTML sanitising after comrak (NFR-SEC-011) | P3 |
+| `bytes`, `http-body` | 1.12.1, 1.1.0 (have) | `klotho-web` streams a raw file through a Topcoat route (`Body::new`) | P3 |
 | `syntect` | 5.3.0 | Server-side syntax highlighting (FR-UI-003) | P3 |
 | `russh` | 0.63.3 | SSH server | P4 |
 | `webauthn-rs` | **0.5.5** | Passkeys. Use the stable 0.5 line, not the `0.6.1-dev` pre-release | P5 |
@@ -345,9 +352,9 @@ Phases run in order: 0, 1, 1b, 2 and onwards. Phase 1b (the native git transport
 
 **Done when:**
 - [ ] `cargo xtask dist` produces one binary that serves the whole UI, with no other files next to it.
-- [ ] With JavaScript disabled, you can browse a repository, open files and read history.
+- [x] With JavaScript disabled, you can browse a repository, open files and read history. (`the_repository_pages_show_files_the_readme_and_history` in `crates/server/tests/browse.rs`; the pages are plain HTML and links. A single commit with its diff is still to come.)
 - [x] Downloading a 1 GiB file through `raw` doesn't grow server memory (`a_1_gib_raw_download_does_not_grow_server_memory` in `crates/server/tests/raw_memory.rs`).
-- [ ] `/api/v1/nope` returns JSON 404, and `/someone/something` returns the HTML 404 page with status 404.
+- [x] `/api/v1/nope` returns JSON 404, and `/someone/something` returns the HTML 404 page with status 404. (`unknown_api_paths_get_json_not_the_web_ui` in `app.rs`, and the browse test)
 - [ ] Every page action added in this phase has a matching API endpoint (check the P3 rows).
 
 > **Guide notes.**
@@ -362,6 +369,13 @@ Phases run in order: 0, 1, 1b, 2 and onwards. Phase 1b (the native git transport
 > - **Learned in the contents step:**
 >   - gix has no streaming blob read: `find_object` decodes the whole object into a buffer. `BlobReader` reads the object database itself: a loose object is one zlib stream (`blob <size>\0` first), and a blob stored whole in a pack is a zlib stream from its entry's `data_offset` in the memory-mapped pack (`gix::zlib::stream::inflate::read` over a `BufRead`). Only deltas fall back to gix, and git doesn't delta-compress files above `core.bigFileThreshold`.
 >   - A counting `#[global_allocator]` in a test binary of its own measures server heap use well, because the `git` client is a separate process. The 1 GiB test takes about two minutes, mostly git compressing and pushing the file.
+> - **Learned in the browse step** (API read endpoints and the repository, folder, file, raw, commits, branches, tags and owner pages):
+>   - matchit can't hold a root catch-all `/{*path}` beside the owner page `/{owner}`. The branded 404 is now two catch-alls, `/-/{*rest}` and `/{owner}/{repo}/{*rest}`; one- and two-segment paths are owner and repository pages, which return the same 404 themselves. The registration panic names an unrelated route, so reproduce conflicts with matchit alone.
+>   - Topcoat doesn't keep attribute order stable between renders, so "not visible looks like missing" is checked on a page's status and visible text, not its bytes.
+>   - The security-header layer used to overwrite `Content-Security-Policy`; it now only fills it in, so the raw route keeps its `sandbox` policy.
+>   - The browser's raw download is a Topcoat route that streams `RawFile.chunks` through `Body::new` (a small `http_body::Body`), because the API's `raw` ignores the session cookie by design.
+>   - comrak needs `finl_unicode` (Unicode-DFS-2016), now allowed in `deny.toml`.
+>   - Still open in this phase: `commits/{sha}` and the commit page with its diff, syntax highlighting (`syntect`), image previews, `/user/repos`, `/users/{username}`, explore and search, `/version`, `openapi.json`, Open Graph tags, the 500 page, `suspense` for last-commit-per-entry, and `FileStore`.
 
 ### Phase 4: Git hardening and data safety
 
