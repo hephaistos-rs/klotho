@@ -17,6 +17,7 @@
 !CHANGELOG*
 !CONTRIBUTING*
 !SECURITY*
+!CODEOWNERS
 
 # Rust and Cargo (Cargo.toml, Cargo.lock, rustfmt.toml, deny.toml,
 # components.toml, .cargo/config.toml, ...)
